@@ -98,7 +98,7 @@ export default function ProfessorPortal() {
       lat: profCoords?.lat ?? 30.0444,
       lng: profCoords?.lng ?? 31.2357,
     };
-    const payload = btoa(JSON.stringify(payloadObj)).replace(/=/g, "");
+    const payload = btoa(unescape(encodeURIComponent(JSON.stringify(payloadObj)))).replace(/=/g, "");
     const sig = Array.from({ length: 30 }, () =>
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"[Math.floor(Math.random() * 64)]
     ).join("");
