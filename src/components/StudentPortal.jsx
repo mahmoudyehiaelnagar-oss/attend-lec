@@ -22,6 +22,7 @@ export default function StudentPortal() {
   const [profCoords, setProfCoords] = useState(null);
   const [distanceToProf, setDistanceToProf] = useState(null);
   const [distanceToClass, setDistanceToClass] = useState(null);
+  const [firebaseError, setFirebaseError] = useState(null);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -76,6 +77,8 @@ export default function StudentPortal() {
           } else {
             setActiveSession(null);
           }
+        } else if (message.type === 'FIREBASE_ERROR') {
+          setFirebaseError(message.payload);
         }
       });
 
@@ -304,6 +307,11 @@ useEffect(() => {
         </div>
 
         <div className="phone-screen">
+          {firebaseError && (
+            <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--danger)', color: 'var(--danger)', fontSize: '0.75rem', padding: '0.5rem 0.75rem', borderRadius: '8px', marginBottom: '1rem', lineHeight: '1.4' }}>
+              ⚠️ خطأ الاتصال بـ Firebase: ({firebaseError}). يرجى مراجعة إعدادات الـ Rules.
+            </div>
+          )}
           <h3 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: '1.2rem', marginBottom: '0.25rem' }}>تسجيل الحضور الذكي</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '1rem' }}>
             {activeSession ? (

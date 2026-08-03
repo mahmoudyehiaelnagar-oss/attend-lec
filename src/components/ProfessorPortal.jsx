@@ -15,6 +15,7 @@ export default function ProfessorPortal() {
   // Professor (doctor) GPS location
   const [profCoords, setProfCoords] = useState(null);
   const [logs, setLogs] = useState([]);
+  const [firebaseError, setFirebaseError] = useState(null);
   const channelRef = useRef(null);
 
   // Initialize and load session/logs
@@ -71,6 +72,8 @@ export default function ProfessorPortal() {
             distanceLimit: Number(distanceLimit) || 5
           });
         }
+      } else if (message.type === 'FIREBASE_ERROR') {
+        setFirebaseError(message.payload);
       }
     });
 
@@ -187,6 +190,11 @@ export default function ProfessorPortal() {
 
   return (
     <div>
+      {firebaseError && (
+        <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--danger)', color: 'var(--danger)', fontSize: '0.85rem', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', lineHeight: '1.4' }}>
+          ⚠️ خطأ في المزامنة مع قاعدة بيانات Firebase: ({firebaseError}). يرجى التأكد من تفعيل Firestore Database وضبط القواعد (Rules) لتكون public.
+        </div>
+      )}
       <div className="grid-4">
         <div className="card">
           <div className="card-title">إجمالي عمليات المسح</div>

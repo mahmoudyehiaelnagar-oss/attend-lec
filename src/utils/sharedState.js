@@ -47,31 +47,47 @@ export const createBroadcastChannel = (onMessage) => {
 
     // Firebase Firestore Realtime Listener for Active Sessions
     try {
-      onSnapshot(doc(db, 'sessions', 'active_session'), (docSnap) => {
-        if (docSnap.exists()) {
-          const sessionData = docSnap.data();
-          if (onMessage) {
-            onMessage({ type: 'SESSION_UPDATE', payload: sessionData });
+      onSnapshot(doc(db, 'sessions', 'active_session'), 
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const sessionData = docSnap.data();
+            if (onMessage) {
+              onMessage({ type: 'SESSION_UPDATE', payload: sessionData });
+            }
+          } else {
+            if (onMessage) {
+              onMessage({ type: 'SESSION_UPDATE', payload: { sessionActive: false } });
+            }
           }
-        } else {
+        },
+        (error) => {
+          console.warn('Firebase session listener error:', error);
           if (onMessage) {
-            onMessage({ type: 'SESSION_UPDATE', payload: { sessionActive: false } });
+            onMessage({ type: 'FIREBASE_ERROR', payload: error.message });
           }
         }
-      });
+      );
 
       // Firebase Firestore Realtime Listener for Attendance Scans
       const q = query(collection(db, 'attendance_logs'), orderBy('timestamp', 'desc'));
-      onSnapshot(q, (snapshot) => {
-        snapshot.docChanges().forEach((change) => {
-          if (change.type === 'added') {
-            const scanData = change.doc.data();
-            if (onMessage) {
-              onMessage({ type: 'STUDENT_SCAN', payload: scanData });
+      onSnapshot(q, 
+        (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+              const scanData = change.doc.data();
+              if (onMessage) {
+                onMessage({ type: 'STUDENT_SCAN', payload: scanData });
+              }
             }
+          });
+        },
+        (error) => {
+          console.warn('Firebase logs listener error:', error);
+          if (onMessage) {
+            onMessage({ type: 'FIREBASE_ERROR', payload: error.message });
           }
-        });
-      });
+        }
+      );
     } catch (firebaseErr) {
       console.warn('Firebase realtime listener fallback:', firebaseErr);
     }
@@ -102,6 +118,9 @@ export const postChannelMessage = async (channel, type, payload) => {
     }
   } catch (err) {
     console.warn('Firebase Cloud sync status:', err);
+    if (channel) {
+      channel.postMessage({ type: 'FIREBASE_ERROR', payload: err.message });
+    }
   }
 };
 
