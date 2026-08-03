@@ -36,19 +36,30 @@ export default function StudentPortal() {
 
   const getLocalIP = () => {
     return new Promise((resolve) => {
-      const pc = new RTCPeerConnection({ iceServers: [] });
-      pc.createDataChannel('');
-      pc.createOffer().then((offer) => pc.setLocalDescription(offer));
-      pc.onicecandidate = (event) => {
-        if (!event || !event.candidate) return;
-        const candidate = event.candidate.candidate;
-        const ipMatch = candidate.match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);
-        if (ipMatch) {
-          resolve(ipMatch[1]);
-          pc.close();
+      try {
+        if (typeof window === 'undefined' || !window.RTCPeerConnection) {
+          resolve(null);
+          return;
         }
-      };
-      setTimeout(() => resolve(null), 1500);
+        const pc = new window.RTCPeerConnection({ iceServers: [] });
+        pc.createDataChannel('');
+        pc.createOffer()
+          .then((offer) => pc.setLocalDescription(offer))
+          .catch(() => resolve(null));
+        pc.onicecandidate = (event) => {
+          if (!event || !event.candidate) return;
+          const candidate = event.candidate.candidate;
+          const ipMatch = candidate.match(/([0-9]{1,3}(?:\.[0-9]{1,3}){3})/);
+          if (ipMatch) {
+            resolve(ipMatch[1]);
+            pc.close();
+          }
+        };
+        setTimeout(() => resolve(null), 1500);
+      } catch (err) {
+        console.warn('WebRTC IP fetch error:', err);
+        resolve(null);
+      }
     });
   };
 
