@@ -19,6 +19,20 @@ export default function ProfessorPortal() {
 
   // Initialize and load session/logs
   useEffect(() => {
+    // Fetch professor's actual GPS location on mount
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          setProfCoords({ lat: latitude, lng: longitude });
+        },
+        (error) => {
+          console.warn('Professor geolocation access denied/failed.');
+        },
+        { enableHighAccuracy: true }
+      );
+    }
+
     const active = getActiveSession();
     if (active) {
       setCourse(active.course);

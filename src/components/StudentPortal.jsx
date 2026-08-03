@@ -18,7 +18,6 @@ export default function StudentPortal() {
   const [activeSession, setActiveSession] = useState(null);
   const [scanStep, setScanStep] = useState('idle'); // idle, scanning, integrity, location, fingerprint, liveness, done
   const [logDetails, setLogDetails] = useState('الرجاء تعبئة بيانات الطالب والضغط على زر بدء الفحص وتنسيق جهازك الحصري.');
-  const [bypassGps, setBypassGps] = useState(true);
   const [actualCoords, setActualCoords] = useState(null);
   const [profCoords, setProfCoords] = useState(null);
   const [distanceToProf, setDistanceToProf] = useState(null);
@@ -165,7 +164,8 @@ useEffect(() => {
     }
 
     setScanStep('scanning');
-    setLogDetails('جاري قراءة رمز الـ QR وفك تشفير الـ AES-256 المشفر ومطابقته...');
+    setLogDetails('جاري فتح الكاميرا وقراءة رمز الـ QR وفك تشفير الـ AES-256 المشفر ومطابقته...');
+    startCamera();
     
     // Step 1: Scan & Decrypt
     setTimeout(() => {
@@ -175,58 +175,74 @@ useEffect(() => {
       // Step 2: OS Integrity Check
       setTimeout(() => {
         setScanStep('location');
-        const allowedDistance = activeSession?.distanceLimit || 5;
-        const gpsDesc = bypassGps 
-          ? 'تم التحقق (موقع قاعة التدريس مفعل افتراضياً)' 
-          : `إحداثياتك الحالية تبعد ${distanceToProf ? distanceToProf.toFixed(1) : 'غير معروف'} متر عن موقع المعلم (المسموح: حتى ${allowedDistance} متر).`;
+        setLogDetails('جاري التقاط إحداثيات الـ GPS ومطابقتها مع موقع المعلم بالوقت الفعلي...');
         
-        // Dynamic Proximity check based on professor's specified limit
-        if (!bypassGps && distanceToProf && distanceToProf > allowedDistance) {
-          failScan('تم الرفض (مخالف للشروط - خارج المسافة المسموح بها)', `أنت تبعد ${distanceToProf.toFixed(1)} متر عن المعلم (المسافة المسموح بها هي ${allowedDistance} متر فقط).`);
-          return;
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (position) => {
+              const { latitude, longitude } = position.coords;
+              setActualCoords({ lat: latitude, lng: longitude });
+              
+              // Calculate distance to professor
+              let dist = 99999;
+              const allowedDistance = activeSession?.distanceLimit || 5;
+              
+              const targetLat = profCoords?.lat ?? activeSession?.lat ?? 30.0444;
+              const targetLng = profCoords?.lng ?? activeSession?.lng ?? 31.2357;
+              
+              dist = calculateDistance(latitude, longitude, targetLat, targetLng);
+              setDistanceToProf(dist);
+              
+              const gpsDesc = `إحداثياتك الحالية تم التحقق منها وتبعد ${dist.toFixed(1)} متر عن موقع المعلم (المسموح: حتى ${allowedDistance} متر).`;
+              
+              if (dist > allowedDistance) {
+                failScan('تم الرفض (مخالف للشروط - خارج المسافة المسموح بها)', `أنت تبعد ${dist.toFixed(1)} متر عن المعلم (المسافة المسموح بها هي ${allowedDistance} متر فقط).`);
+                return;
+              }
+              
+              setLogDetails(`فحص النطاق الجغرافي (GPS Geofencing): ${gpsDesc}`);
+              
+              // Proceed to Step 4 (fingerprint) after success
+              setTimeout(() => {
+                setScanStep('fingerprint');
+                setLogDetails('التحقق من بصمة الجهاز (Hardware Fingerprint Binding): التأكد من الربط الحصري بالـ IP...');
+                
+                // Step 4: Device Fingerprint check
+                setTimeout(() => {
+                  setScanStep('liveness');
+                  setLogDetails('فحص الحيوية (Liveness Detection): يرجى النظر للكاميرا والرمش بعينيك...');
+                  
+                  // Step 5: Biometric Liveness
+                  setTimeout(() => {
+                    stopCamera();
+                    
+                    const scanResult = {
+                      studentId: studentId.trim(),
+                      name: studentName.trim(),
+                      email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
+                      status: 'Attended',
+                      integrity: 'سليم (بصمة جهاز موثقة بالـ IP)',
+                      gps: `داخل النطاق (${dist.toFixed(1)}م)`,
+                      liveness: '99.3% (مطابق وموثق)',
+                      timestamp: Date.now()
+                    };
+                    setScanStep('done');
+                    setLogDetails('✓ تم تسجيل حضورك بنجاح ومزامنته مع الأستاذ بالوقت الفعلي!');
+                    postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
+                  }, 2500);
+                }, 1500);
+              }, 1500);
+            },
+            (error) => {
+              failScan('تم الرفض (فشل تحديد الموقع)', 'يرجى تفعيل الـ GPS وصلاحية الموقع في المتصفح وتجربة المحاولة مجدداً.');
+            },
+            { enableHighAccuracy: true, timeout: 6000 }
+          );
+        } else {
+          failScan('تم الرفض (الـ GPS غير مدعوم)', 'جهازك أو متصفحك لا يدعم تحديد المواقع.');
         }
-        setLogDetails(`فحص النطاق الجغرافي (GPS Geofencing): ${gpsDesc}`);
-
-        // Step 3: Location Check
-        setTimeout(() => {
-          if (!bypassGps && distanceToClass && distanceToClass > allowedDistance) {
-            failScan('تم الرفض (مخالف للشروط - خارج نطاق القاعة)', `أنت تبعد ${distanceToClass.toFixed(1)} متراً من القاعة (المسافة المسموح بها هي ${allowedDistance} متر).`);
-            return;
-          }
-
-          setScanStep('fingerprint');
-          setLogDetails('التحقق من بصمة الجهاز (Hardware Fingerprint Binding): التأكد من الربط الحصري بالـ IP...');
-
-          // Step 4: Device Fingerprint check
-          setTimeout(() => {
-            setScanStep('liveness');
-            setLogDetails('فتح الكاميرا الأمامية للتحقق من الحيوية (Liveness Detection): يرجى النظر للكاميرا...');
-            startCamera();
-
-            // Step 5: Biometric Liveness
-            setTimeout(() => {
-              stopCamera();
-
-              // Success path
-              const scanResult = {
-                studentId: studentId.trim(),
-                name: studentName.trim(),
-                email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
-                status: 'Attended',
-                integrity: 'سليم (بصمة جهاز موثقة بالـ IP)',
-                gps: bypassGps ? 'مقبول (موقع افتراضي)' : `داخل النطاق (${distanceToProf ? distanceToProf.toFixed(1) : '2.1'}م)`,
-                liveness: '99.3% (مطابق وموثق)',
-                timestamp: Date.now()
-              };
-              setScanStep('done');
-              setLogDetails('✓ تم تسجيل حضورك بنجاح ومزامنته مع الأستاذ بالوقت الفعلي!');
-              postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
-
-            }, 2500);
-          }, 1500);
-        }, 1500);
       }, 1500);
-    }, 1500);
+    }, 2000);
   };
 
   const failScan = (reason, details) => {
@@ -235,11 +251,13 @@ useEffect(() => {
     setLogDetails(`✗ ${reason}: ${details}`);
 
     const allowedDist = activeSession?.distanceLimit || 5;
-    let gpsStatus = 'سليم';
-    if (distanceToProf && distanceToProf > allowedDist) {
-      gpsStatus = `خارج المسافة المسموح بها (${distanceToProf.toFixed(1)}م من المعلم)`;
-    } else if (!bypassGps && distanceToClass && distanceToClass > allowedDist) {
-      gpsStatus = `خارج نطاق القاعة (${distanceToClass.toFixed(1)}م)`;
+    let gpsStatus = 'تعذر تحديد الموقع';
+    if (distanceToProf) {
+      if (distanceToProf > allowedDist) {
+        gpsStatus = `خارج المسافة المسموح بها (${distanceToProf.toFixed(1)}م من المعلم)`;
+      } else {
+        gpsStatus = `سليم (${distanceToProf.toFixed(1)}م)`;
+      }
     }
 
     const scanResult = {
@@ -318,28 +336,16 @@ useEffect(() => {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
-            <input 
-              type="checkbox" 
-              id="bypassGps" 
-              checked={bypassGps} 
-              onChange={(e) => setBypassGps(e.target.checked)} 
-              disabled={scanStep !== 'idle' && scanStep !== 'done'}
-              style={{ width: 'auto' }}
-            />
-            <label htmlFor="bypassGps" style={{ fontSize: '0.75rem', color: 'var(--muted)', cursor: 'pointer' }}>
-              محاكاة موقع قاعة الدرس (لتخطي فحص النطاق الجغرافي)
-            </label>
-          </div>
+
 
           {/* Camera Frame View */}
           <div className="phone-camera-simulate">
             {scanStep === 'liveness' && <div className="face-overlay"></div>}
-            {scanStep === 'liveness' ? (
+            {scanStep === 'scanning' && <div className="scanner-line"></div>}
+            {['scanning', 'integrity', 'location', 'fingerprint', 'liveness'].includes(scanStep) ? (
               <video ref={videoRef} autoPlay playsInline className="phone-video-stream" />
             ) : (
               <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--muted)' }}>
-                {scanStep === 'scanning' && <div className="scanner-line"></div>}
                 <Camera size={32} style={{ marginBottom: '0.5rem', color: 'var(--muted)' }} />
                 <span style={{ fontSize: '0.75rem', display: 'block' }}>الكاميرا مغلقة</span>
               </div>
