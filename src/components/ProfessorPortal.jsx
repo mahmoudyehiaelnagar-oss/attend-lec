@@ -109,25 +109,31 @@ export default function ProfessorPortal() {
 // QR token is generated once on lecture start; no automatic rotation
 
   const startLecture = async () => {
-    // Obtain professor's local IP address
-    const ip = await getLocalIP();
-    setSessionActive(true);
-    setTimeLeft(15);
-    // Clear logs from previous sessions when starting new
-    setLogs([]);
-    saveAttendanceLogs([]);
-    
-    // Generate initial QR token
-    const token = generateQRToken();
-    setQrToken(token);
+    try {
+      setFirebaseError(null);
+      // Obtain professor's local IP address
+      const ip = await getLocalIP();
+      setSessionActive(true);
+      setTimeLeft(15);
+      // Clear logs from previous sessions when starting new
+      setLogs([]);
+      saveAttendanceLogs([]);
+      
+      // Generate initial QR token
+      const token = generateQRToken();
+      setQrToken(token);
 
-    // Persist professor location (if known)
-    const lat = profCoords?.lat ?? 30.0444;
-    const lng = profCoords?.lng ?? 31.2357;
-    // Include IP, profName, and lectureTitle in session payload
-    const sessionPayload = { profName, lectureTitle, course, sessionActive: true, qrToken: token, lat, lng, ip, distanceLimit: Number(distanceLimit) || 5 };
-    saveActiveSession(sessionPayload);
-    postChannelMessage(channelRef.current, 'SESSION_UPDATE', sessionPayload);
+      // Persist professor location (if known)
+      const lat = profCoords?.lat ?? 30.0444;
+      const lng = profCoords?.lng ?? 31.2357;
+      // Include IP, profName, and lectureTitle in session payload
+      const sessionPayload = { profName, lectureTitle, course, sessionActive: true, qrToken: token, lat, lng, ip, distanceLimit: Number(distanceLimit) || 5 };
+      saveActiveSession(sessionPayload);
+      await postChannelMessage(channelRef.current, 'SESSION_UPDATE', sessionPayload);
+    } catch (err) {
+      console.error(err);
+      setFirebaseError(err.message);
+    }
   };
 
   // Helper to get local IP via WebRTC
@@ -161,14 +167,20 @@ export default function ProfessorPortal() {
     });
   };
 
-  const stopLecture = () => {
-    setSessionActive(false);
-    clearActiveSession();
-    postChannelMessage(channelRef.current, 'SESSION_UPDATE', {
-      course,
-      sessionActive: false,
-      qrToken: '',
-    });
+  const stopLecture = async () => {
+    try {
+      setFirebaseError(null);
+      setSessionActive(false);
+      clearActiveSession();
+      await postChannelMessage(channelRef.current, 'SESSION_UPDATE', {
+        course,
+        sessionActive: false,
+        qrToken: '',
+      });
+    } catch (err) {
+      console.error(err);
+      setFirebaseError(err.message);
+    }
   };
 
   const handleClearHistory = async () => {

@@ -121,6 +121,7 @@ export const postChannelMessage = async (channel, type, payload) => {
     if (channel) {
       channel.postMessage({ type: 'FIREBASE_ERROR', payload: err.message });
     }
+    throw err;
   }
 };
 
