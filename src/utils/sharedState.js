@@ -3,13 +3,13 @@ import { getFirestore, doc, onSnapshot, setDoc, deleteDoc, collection, addDoc, q
 
 // User's Firebase Project Configuration (attend-lec-9de44)
 const firebaseConfig = {
-  apiKey: "AIzaSyAq_yMDewlZX8jRVsyWiwjdl7lnW8DoW4M",
-  authDomain: "attend-lec-9de44.firebaseapp.com",
-  projectId: "attend-lec-9de44",
-  storageBucket: "attend-lec-9de44.firebasestorage.app",
-  messagingSenderId: "1048104611016",
-  appId: "1:1048104611016:web:ea126bbdac1138d49b89fd",
-  measurementId: "G-JDDLBLJ1SM"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAq_yMDewlZX8jRVsyWiwjdl7lnW8DoW4M",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || `${import.meta.env.VITE_FIREBASE_PROJECT_ID || "attend-lec-9de44"}.firebaseapp.com`,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "attend-lec-9de44",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || `${import.meta.env.VITE_FIREBASE_PROJECT_ID || "attend-lec-9de44"}.firebasestorage.app`,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1048104611016",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:1048104611016:web:ea126bbdac1138d49b89fd",
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || "G-JDDLBLJ1SM"
 };
 
 // Initialize Firebase & Firestore
