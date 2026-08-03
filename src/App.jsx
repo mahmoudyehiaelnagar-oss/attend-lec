@@ -4,7 +4,20 @@ import StudentPortal from './components/StudentPortal';
 import { ShieldAlert, BookOpen, User } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('demo'); // 'professor', 'student', 'demo'
+  const [activeTab, setActiveTab] = useState('student'); // Default to student view for security
+
+  const handleTabChange = (tab) => {
+    if (tab === 'professor' || tab === 'demo') {
+      const password = prompt('الرجاء إدخال رمز التحقق الخاص بالأستاذ:');
+      if (password === '373911') {
+        setActiveTab(tab);
+      } else {
+        alert('رمز الدخول خاطئ! هذه الصفحة مخصصة للمحاضرين فقط.');
+      }
+    } else {
+      setActiveTab(tab);
+    }
+  };
 
   return (
     <div>
@@ -22,19 +35,19 @@ export default function App() {
       <nav>
         <button 
           className={`nav-btn ${activeTab === 'demo' ? 'active' : ''}`} 
-          onClick={() => setActiveTab('demo')}
+          onClick={() => handleTabChange('demo')}
         >
           عرض الواجهتين معاً (وضع المحاكاة)
         </button>
         <button 
           className={`nav-btn ${activeTab === 'professor' ? 'active' : ''}`} 
-          onClick={() => setActiveTab('professor')}
+          onClick={() => handleTabChange('professor')}
         >
           لوحة الأستاذ (Professor Panel)
         </button>
         <button 
           className={`nav-btn ${activeTab === 'student' ? 'active' : ''}`} 
-          onClick={() => setActiveTab('student')}
+          onClick={() => handleTabChange('student')}
         >
           تطبيق الطالب المحمول (Student View)
         </button>
