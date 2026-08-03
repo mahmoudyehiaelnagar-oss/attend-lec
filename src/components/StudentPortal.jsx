@@ -418,9 +418,24 @@ useEffect(() => {
           {/* Camera Frame View */}
           <div className="phone-camera-simulate">
             {scanStep === 'liveness' && <div className="face-overlay"></div>}
-            {scanStep === 'scanning' && <div className="scanner-line"></div>}
+            
+            {scanStep === 'scanning' && (
+              <div className="qr-scanner-overlay">
+                <div className="qr-scanner-viewfinder">
+                  <div className="qr-scanner-corner-tr"></div>
+                  <div className="qr-scanner-corner-bl"></div>
+                  <div className="qr-laser-line"></div>
+                </div>
+              </div>
+            )}
+            
             {['scanning', 'integrity', 'location', 'fingerprint', 'liveness'].includes(scanStep) ? (
-              <video ref={videoRef} autoPlay playsInline className="phone-video-stream" />
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className={`phone-video-stream ${scanStep === 'liveness' ? 'mirrored' : ''}`} 
+              />
             ) : (
               <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--muted)' }}>
                 <Camera size={32} style={{ marginBottom: '0.5rem', color: 'var(--muted)' }} />

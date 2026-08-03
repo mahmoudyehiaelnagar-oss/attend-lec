@@ -465,6 +465,9 @@ tr:hover td {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.phone-video-stream.mirrored {
   transform: scaleX(-1);
 }
 
@@ -476,12 +479,106 @@ tr:hover td {
   border-radius: 50%;
   animation: pulse-dashed 2s infinite ease-in-out;
   pointer-events: none;
+  z-index: 10;
 }
 
 @keyframes pulse-dashed {
   0% { transform: scale(0.95); opacity: 0.5; }
   50% { transform: scale(1.05); opacity: 1; }
   100% { transform: scale(0.95); opacity: 0.5; }
+}
+
+/* QR Scanner Viewfinder Styles */
+.qr-scanner-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.qr-scanner-viewfinder {
+  width: 140px;
+  height: 140px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  position: relative;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6); /* Viewfinder dark mask */
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Corner markers */
+.qr-scanner-viewfinder::before,
+.qr-scanner-viewfinder::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: var(--accent);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 11;
+}
+
+/* Top left corner */
+.qr-scanner-viewfinder::before {
+  top: -2px;
+  left: -2px;
+  border-width: 4px 0 0 4px;
+}
+
+/* Bottom right corner */
+.qr-scanner-viewfinder::after {
+  bottom: -2px;
+  right: -2px;
+  border-width: 0 4px 4px 0;
+}
+
+/* Top right and bottom left corners */
+.qr-scanner-corner-tr,
+.qr-scanner-corner-bl {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-color: var(--accent);
+  border-style: solid;
+  pointer-events: none;
+  z-index: 11;
+}
+
+.qr-scanner-corner-tr {
+  top: -2px;
+  right: -2px;
+  border-width: 4px 4px 0 0;
+}
+
+.qr-scanner-corner-bl {
+  bottom: -2px;
+  left: -2px;
+  border-width: 0 0 4px 4px;
+}
+
+/* Laser line animation */
+.qr-laser-line {
+  position: absolute;
+  left: 5%;
+  width: 90%;
+  height: 3px;
+  background-color: var(--accent);
+  box-shadow: 0 0 10px 2px var(--accent);
+  animation: qr-laser-scan 2s infinite ease-in-out;
+  z-index: 12;
+}
+
+@keyframes qr-laser-scan {
+  0% { top: 5%; }
+  50% { top: 95%; }
+  100% { top: 5%; }
 }
 
 /* Sidebar structure for settings / architecture */
