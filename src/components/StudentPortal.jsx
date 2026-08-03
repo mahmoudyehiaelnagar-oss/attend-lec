@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Shield, MapPin, Camera, Smartphone, AlertOctagon, CheckCircle2 } from 'lucide-react';
 import { createBroadcastChannel, postChannelMessage } from '../utils/sharedState';
+import jsQR from 'jsqr';
 
 const MOCK_STUDENTS = [
   { id: '2024-PHARM-099', name: 'أحمد الغامدي', profile: 'clean', title: 'سليم (مطابقة 100%)' },
@@ -27,6 +28,8 @@ export default function StudentPortal() {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const channelRef = useRef(null);
+  const canvasRef = useRef(null);
+  const scanIntervalRef = useRef(null);
 
   // Obtain student device IP on mount
   useEffect(() => {
@@ -163,6 +166,138 @@ useEffect(() => {
     }
   };
 
+  const scanQRFrame = () => {
+    if (videoRef.current && streamRef.current && scanStep === 'scanning') {
+      const video = videoRef.current;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement('canvas');
+        }
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "dontInvert",
+        });
+
+        if (code) {
+          const scannedToken = code.data;
+          // Validate token
+          if (activeSession && scannedToken === activeSession.qrToken) {
+            // QR Matched! Stop scanning loop and go to next step
+            if (scanIntervalRef.current) {
+              cancelAnimationFrame(scanIntervalRef.current);
+              scanIntervalRef.current = null;
+            }
+            
+            setScanStep('integrity');
+            setLogDetails('✓ تم مسح الـ QR وقراءته بنجاح! جاري فحص سلامة نظام التشغيل (OS Integrity)...');
+            
+            // Start the remaining verification steps
+            setTimeout(() => {
+              setScanStep('location');
+              setLogDetails('جاري التقاط إحداثيات الـ GPS ومطابقتها مع موقع المعلم بالوقت الفعلي...');
+              
+              if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                  (position) => {
+                    const { latitude, longitude } = position.coords;
+                    setActualCoords({ lat: latitude, lng: longitude });
+                    
+                    let dist = 99999;
+                    const allowedDistance = activeSession?.distanceLimit || 5;
+                    const targetLat = profCoords?.lat ?? activeSession?.lat ?? 30.0444;
+                    const targetLng = profCoords?.lng ?? activeSession?.lng ?? 31.2357;
+                    
+                    dist = calculateDistance(latitude, longitude, targetLat, targetLng);
+                    setDistanceToProf(dist);
+                    
+                    const gpsDesc = `إحداثياتك الحالية تم التحقق منها وتبعد ${dist.toFixed(1)} متر عن موقع المعلم (المسموح: حتى ${allowedDistance} متر).`;
+                    
+                    if (dist > allowedDistance) {
+                      failScan('تم الرفض (مخالف للشروط - خارج المسافة المسموح بها)', `أنت تبعد ${dist.toFixed(1)} متر عن المعلم (المسافة المسموح بها هي ${allowedDistance} متر فقط).`);
+                      return;
+                    }
+                    
+                    setLogDetails(`فحص النطاق الجغرافي (GPS Geofencing): ${gpsDesc}`);
+                    
+                    // Step 3: Fingerprint check
+                    setTimeout(() => {
+                      setScanStep('fingerprint');
+                      setLogDetails('التحقق من بصمة الجهاز (Hardware Fingerprint Binding): التأكد من الربط الحصري بالـ IP...');
+                      
+                      // Step 4: Device Fingerprint check
+                      setTimeout(() => {
+                        setScanStep('liveness');
+                        setLogDetails('فحص الحيوية (Liveness Detection): يرجى النظر للكاميرا والرمش بعينيك...');
+                        
+                        // Step 5: Biometric Liveness
+                        setTimeout(() => {
+                          stopCamera();
+                          
+                          const scanResult = {
+                            studentId: studentId.trim(),
+                            name: studentName.trim(),
+                            email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
+                            status: 'Attended',
+                            integrity: 'سليم (بصمة جهاز موثقة بالـ IP)',
+                            gps: `داخل النطاق (${dist.toFixed(1)}م)`,
+                            liveness: '99.3% (مطابق وموثق)',
+                            timestamp: Date.now()
+                          };
+                          setScanStep('done');
+                          setLogDetails('✓ تم تسجيل حضورك بنجاح ومزامنته مع الأستاذ بالوقت الفعلي!');
+                          postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
+                        }, 2500);
+                      }, 1500);
+                    }, 1500);
+                  },
+                  (error) => {
+                    failScan('تم الرفض (فشل تحديد الموقع)', 'يرجى تفعيل الـ GPS وصلاحية الموقع في المتصفح وتجربة المحاولة مجدداً.');
+                  },
+                  { enableHighAccuracy: true, timeout: 6000 }
+                );
+              } else {
+                failScan('تم الرفض (الـ GPS غير مدعوم)', 'جهازك أو متصفحك لا يدعم تحديد المواقع.');
+              }
+            }, 1500);
+            return;
+          } else {
+            setLogDetails('جاري مسح الـ QR... الرمز المكتشف غير مطابق للمحاضرة النشطة. يرجى توجيه الكاميرا للكود المعروض حالياً.');
+          }
+        }
+      }
+      scanIntervalRef.current = requestAnimationFrame(scanQRFrame);
+    }
+  };
+
+  // Start QR scanning loop once video metadata is loaded
+  useEffect(() => {
+    if (scanStep === 'scanning') {
+      const checkVideo = () => {
+        if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA) {
+          scanQRFrame();
+        } else {
+          scanIntervalRef.current = requestAnimationFrame(checkVideo);
+        }
+      };
+      scanIntervalRef.current = requestAnimationFrame(checkVideo);
+    } else {
+      if (scanIntervalRef.current) {
+        cancelAnimationFrame(scanIntervalRef.current);
+        scanIntervalRef.current = null;
+      }
+    }
+    return () => {
+      if (scanIntervalRef.current) {
+        cancelAnimationFrame(scanIntervalRef.current);
+      }
+    };
+  }, [scanStep, activeSession, profCoords]);
+
   const runSimulation = () => {
     if (!activeSession) {
       alert('لا توجد محاضرة مفعلة حالياً من قبل المعلم. يرجى انتظار تفعيل المحاضرة أولاً.');
@@ -178,85 +313,8 @@ useEffect(() => {
     }
 
     setScanStep('scanning');
-    setLogDetails('جاري فتح الكاميرا وقراءة رمز الـ QR وفك تشفير الـ AES-256 المشفر ومطابقته...');
+    setLogDetails('جاري فتح الكاميرا... يرجى توجيه الكاميرا نحو باركود المحاضرة (QR Code) لمسحه...');
     startCamera();
-    
-    // Step 1: Scan & Decrypt
-    setTimeout(() => {
-      setScanStep('integrity');
-      setLogDetails('فحص سلامة نظام التشغيل (OS Integrity): التحقق من الحماية وتعديل النظام... تم بنجاح');
-      
-      // Step 2: OS Integrity Check
-      setTimeout(() => {
-        setScanStep('location');
-        setLogDetails('جاري التقاط إحداثيات الـ GPS ومطابقتها مع موقع المعلم بالوقت الفعلي...');
-        
-        if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(
-            (position) => {
-              const { latitude, longitude } = position.coords;
-              setActualCoords({ lat: latitude, lng: longitude });
-              
-              // Calculate distance to professor
-              let dist = 99999;
-              const allowedDistance = activeSession?.distanceLimit || 5;
-              
-              const targetLat = profCoords?.lat ?? activeSession?.lat ?? 30.0444;
-              const targetLng = profCoords?.lng ?? activeSession?.lng ?? 31.2357;
-              
-              dist = calculateDistance(latitude, longitude, targetLat, targetLng);
-              setDistanceToProf(dist);
-              
-              const gpsDesc = `إحداثياتك الحالية تم التحقق منها وتبعد ${dist.toFixed(1)} متر عن موقع المعلم (المسموح: حتى ${allowedDistance} متر).`;
-              
-              if (dist > allowedDistance) {
-                failScan('تم الرفض (مخالف للشروط - خارج المسافة المسموح بها)', `أنت تبعد ${dist.toFixed(1)} متر عن المعلم (المسافة المسموح بها هي ${allowedDistance} متر فقط).`);
-                return;
-              }
-              
-              setLogDetails(`فحص النطاق الجغرافي (GPS Geofencing): ${gpsDesc}`);
-              
-              // Proceed to Step 4 (fingerprint) after success
-              setTimeout(() => {
-                setScanStep('fingerprint');
-                setLogDetails('التحقق من بصمة الجهاز (Hardware Fingerprint Binding): التأكد من الربط الحصري بالـ IP...');
-                
-                // Step 4: Device Fingerprint check
-                setTimeout(() => {
-                  setScanStep('liveness');
-                  setLogDetails('فحص الحيوية (Liveness Detection): يرجى النظر للكاميرا والرمش بعينيك...');
-                  
-                  // Step 5: Biometric Liveness
-                  setTimeout(() => {
-                    stopCamera();
-                    
-                    const scanResult = {
-                      studentId: studentId.trim(),
-                      name: studentName.trim(),
-                      email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
-                      status: 'Attended',
-                      integrity: 'سليم (بصمة جهاز موثقة بالـ IP)',
-                      gps: `داخل النطاق (${dist.toFixed(1)}م)`,
-                      liveness: '99.3% (مطابق وموثق)',
-                      timestamp: Date.now()
-                    };
-                    setScanStep('done');
-                    setLogDetails('✓ تم تسجيل حضورك بنجاح ومزامنته مع الأستاذ بالوقت الفعلي!');
-                    postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
-                  }, 2500);
-                }, 1500);
-              }, 1500);
-            },
-            (error) => {
-              failScan('تم الرفض (فشل تحديد الموقع)', 'يرجى تفعيل الـ GPS وصلاحية الموقع في المتصفح وتجربة المحاولة مجدداً.');
-            },
-            { enableHighAccuracy: true, timeout: 6000 }
-          );
-        } else {
-          failScan('تم الرفض (الـ GPS غير مدعوم)', 'جهازك أو متصفحك لا يدعم تحديد المواقع.');
-        }
-      }, 1500);
-    }, 2000);
   };
 
   const failScan = (reason, details) => {
