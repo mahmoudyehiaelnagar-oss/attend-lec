@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Square, Users, CheckCircle, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
 import { QRCodeSVG as QRCode } from 'qrcode.react';
-import { createBroadcastChannel, postChannelMessage, saveActiveSession, getActiveSession, clearActiveSession, getAttendanceLogs, saveAttendanceLogs } from '../utils/sharedState';
+import { createBroadcastChannel, postChannelMessage, saveActiveSession, getActiveSession, clearActiveSession, getAttendanceLogs, saveAttendanceLogs, clearAllAttendanceLogs } from '../utils/sharedState';
 
 export default function ProfessorPortal() {
   const [profName, setProfName] = useState('د. محمود يحيى');
@@ -157,6 +157,13 @@ export default function ProfessorPortal() {
     });
   };
 
+  const handleClearHistory = async () => {
+    if (window.confirm('هل أنت متأكد من مسح جميع سجلات الحضور للجلسة الحالية من الخادم وقاعدة البيانات؟')) {
+      await clearAllAttendanceLogs();
+      setLogs([]);
+    }
+  };
+
   const getStats = () => {
     const totalScans = logs.length;
     const verified = logs.filter(l => l.status === 'Attended').length;
@@ -194,7 +201,18 @@ export default function ProfessorPortal() {
 
       <div className="dashboard-layout">
         <div>
-          <h2 className="section-title">سجل الحضور الأمني الفوري</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+            <h2 className="section-title" style={{ margin: 0 }}>سجل الحضور الأمني الفوري</h2>
+            {logs.length > 0 && (
+              <button 
+                className="btn btn-secondary" 
+                onClick={handleClearHistory} 
+                style={{ background: 'var(--danger)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+              >
+                مسح تاريخ الجلسة
+              </button>
+            )}
+          </div>
           <div className="table-container">
             <table>
               <thead>

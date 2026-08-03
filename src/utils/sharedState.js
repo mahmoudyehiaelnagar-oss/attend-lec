@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, onSnapshot, setDoc, deleteDoc, collection, addDoc, query, orderBy } from 'firebase/firestore';
+import { getFirestore, doc, onSnapshot, setDoc, deleteDoc, collection, addDoc, query, orderBy, getDocs, writeBatch } from 'firebase/firestore';
 
 // User's Firebase Project Configuration (attend-lec-9de44)
 const firebaseConfig = {
@@ -15,6 +15,21 @@ const firebaseConfig = {
 // Initialize Firebase & Firestore
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
+
+export const clearAllAttendanceLogs = async () => {
+  try {
+    const querySnapshot = await getDocs(collection(db, 'attendance_logs'));
+    const batch = writeBatch(db);
+    querySnapshot.forEach((docSnap) => {
+      batch.delete(docSnap.ref);
+    });
+    await batch.commit();
+    localStorage.removeItem('uams_attendance_logs');
+  } catch (err) {
+    console.warn('Firebase clear logs status:', err);
+    localStorage.removeItem('uams_attendance_logs');
+  }
+};
 
 // Shared state management using BroadcastChannel + Firebase Firestore Sync
 const CHANNEL_NAME = 'uams-realtime-channel';
