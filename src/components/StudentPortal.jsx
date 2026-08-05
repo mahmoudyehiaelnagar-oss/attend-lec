@@ -24,6 +24,7 @@ export default function StudentPortal() {
   const [distanceToProf, setDistanceToProf] = useState(null);
   const [distanceToClass, setDistanceToClass] = useState(null);
   const [firebaseError, setFirebaseError] = useState(null);
+  const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(null);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -66,6 +67,26 @@ export default function StudentPortal() {
       }
     });
   };
+
+  // Check if this device has already registered for the current active session
+  useEffect(() => {
+    if (activeSession) {
+      const lockKey = `device_lock_${activeSession.course}_${activeSession.qrToken?.substring(0, 15) || 'session'}`;
+      const existing = localStorage.getItem(lockKey);
+      if (existing) {
+        try {
+          const parsed = JSON.parse(existing);
+          setRegisteredOnThisDevice(parsed);
+          setStudentId(parsed.studentId || '');
+          setStudentName(parsed.name || '');
+          setScanStep('done');
+          setLogDetails(`✓ تم تسجيل الحضور من هذا الجهاز بنجاح للطالب: (${parsed.name} - ${parsed.studentId}). لا يمكن تسجيل طالب آخر من نفس الجهاز.`);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+  }, [activeSession]);
 
   // Sync session state from Professor
   useEffect(() => {
@@ -248,8 +269,14 @@ useEffect(() => {
                             liveness: '99.3% (مطابق وموثق)',
                             timestamp: Date.now()
                           };
+
+                          // Save device lock for this session
+                          const lockKey = `device_lock_${activeSession?.course}_${activeSession?.qrToken?.substring(0, 15) || 'session'}`;
+                          localStorage.setItem(lockKey, JSON.stringify(scanResult));
+                          setRegisteredOnThisDevice(scanResult);
+
                           setScanStep('done');
-                          setLogDetails('✓ تم تسجيل حضورك بنجاح ومزامنته مع الأستاذ بالوقت الفعلي!');
+                          setLogDetails(`✓ تم تسجيل حضورك بنجاح (${studentName.trim()}) ومزامنته بالوقت الفعلي! تم قفل هذا الجهاز لمنع تكرار التسجيل.`);
                           postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
                         }, 2500);
                       }, 1500);
@@ -301,6 +328,12 @@ useEffect(() => {
   const runSimulation = () => {
     if (!activeSession) {
       alert('لا توجد محاضرة مفعلة حالياً من قبل المعلم. يرجى انتظار تفعيل المحاضرة أولاً.');
+      return;
+    }
+
+    // Check device lock
+    if (registeredOnThisDevice) {
+      alert(`⚠️ تنبيه أمني: تم تسجيل الحضور من هذا الجهاز بالفعل لـ (${registeredOnThisDevice.name} - ${registeredOnThisDevice.studentId}).\n\nلا يسمح بتسجيل أكثر من طالب واحد من نفس الجهاز!`);
       return;
     }
 
@@ -380,6 +413,12 @@ useEffect(() => {
               'لا توجد محاضرة نشطة حالياً'
             )}
           </p>
+
+          {registeredOnThisDevice && (
+            <div style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid var(--success)', color: 'var(--success)', fontSize: '0.8rem', padding: '0.65rem 0.85rem', borderRadius: '8px', marginBottom: '1rem', lineHeight: '1.4' }}>
+              🔒 <strong>الجهاز مقفل ومسجل:</strong> تم تسجيل حضور هذا الجهاز بنجاح باسم <strong>{registeredOnThisDevice.name}</strong> ({registeredOnThisDevice.studentId}). لا يمكن تسجيل أي طالب آخر من هذا الجهاز.
+            </div>
+          )}
 
           <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', border: '1px solid var(--accent)', background: 'rgba(99, 102, 241, 0.08)' }}>
             <label style={{ fontSize: '0.8rem', fontWeight: 800, display: 'block', marginBottom: '0.6rem', color: 'var(--accent)' }}>

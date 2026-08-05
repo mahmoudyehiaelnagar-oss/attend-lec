@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Users, CheckCircle, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
+import { Play, Square, Users, CheckCircle, AlertTriangle, ShieldCheck, RefreshCw, Download } from 'lucide-react';
 import { QRCodeSVG as QRCode } from 'qrcode.react';
 import { createBroadcastChannel, postChannelMessage, saveActiveSession, getActiveSession, clearActiveSession, getAttendanceLogs, saveAttendanceLogs, clearAllAttendanceLogs } from '../utils/sharedState';
 
@@ -200,6 +200,36 @@ export default function ProfessorPortal() {
 
   const stats = getStats();
 
+  const exportToCSV = (statusFilter, filenamePrefix) => {
+    const filteredLogs = logs.filter(l => statusFilter === 'all' || (statusFilter === 'Attended' ? l.status === 'Attended' : l.status !== 'Attended'));
+    if (filteredLogs.length === 0) {
+      alert('لا توجد بيانات متاحة للتصدير لهذه الفئة');
+      return;
+    }
+
+    const headers = ['معرف الطالب', 'اسم الطالب', 'البريد الجامعي', 'الحالة', 'فحص الجهاز', 'فحص GPS', 'مطابقة الوجه', 'التاريخ والوقت'];
+    const rows = filteredLogs.map(log => [
+      `"${log.studentId || ''}"`,
+      `"${log.name || ''}"`,
+      `"${log.email || ''}"`,
+      `"${log.status === 'Attended' ? 'مقبول / حاضر' : 'مرفوض / مخالف'}"`,
+      `"${log.integrity || ''}"`,
+      `"${log.gps || ''}"`,
+      `"${log.liveness || ''}"`,
+      `"${log.timestamp ? new Date(log.timestamp).toLocaleString('ar-EG') : ''}"`
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${filenamePrefix}_${course}_${new Date().toISOString().slice(0,10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div>
       {firebaseError && (
@@ -232,17 +262,33 @@ export default function ProfessorPortal() {
 
       <div className="dashboard-layout">
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
             <h2 className="section-title" style={{ margin: 0 }}>سجل الحضور الأمني الفوري</h2>
-            {logs.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button 
                 className="btn btn-secondary" 
-                onClick={handleClearHistory} 
-                style={{ background: 'var(--danger)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                onClick={() => exportToCSV('Attended', 'الطلاب_الحاضرون')}
+                style={{ background: 'var(--success)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
               >
-                مسح تاريخ الجلسة
+                <Download size={14} /> تصدير الحاضرين (Excel)
               </button>
-            )}
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => exportToCSV('Rejected', 'الطلاب_المخالفون')}
+                style={{ background: 'var(--warning, #eab308)', color: 'black', padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
+              >
+                <Download size={14} /> تصدير المخالفين (Excel)
+              </button>
+              {logs.length > 0 && (
+                <button 
+                  className="btn btn-secondary" 
+                  onClick={handleClearHistory} 
+                  style={{ background: 'var(--danger)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
+                >
+                  مسح التاريخ
+                </button>
+              )}
+            </div>
           </div>
           <div className="table-container">
             <table>
