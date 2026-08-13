@@ -1,24 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Square, Users, CheckCircle, AlertTriangle, ShieldCheck, RefreshCw, Download } from 'lucide-react';
+import { Play, Square, Users, CheckCircle, AlertTriangle, ShieldCheck, Download, Plus, BookOpen, Trash2 } from 'lucide-react';
 import { QRCodeSVG as QRCode } from 'qrcode.react';
-import { createBroadcastChannel, postChannelMessage, saveActiveSession, getActiveSession, clearActiveSession, getAttendanceLogs, saveAttendanceLogs, clearAllAttendanceLogs } from '../utils/sharedState';
+import { createBroadcastChannel, postChannelMessage, saveActiveSessions, getActiveSessions, getAttendanceLogs, saveAttendanceLogs, clearAllAttendanceLogs } from '../utils/sharedState';
 
 export default function ProfessorPortal() {
   const [profName, setProfName] = useState('د. محمود يحيى');
   const [department, setDepartment] = useState('PHARM-MIC');
   const [lectureTitle, setLectureTitle] = useState('الميكروبيولوجي والمناعة (Microbiology & Immunology)');
   const [course, setCourse] = useState('P-MIC-301');
-  const [sessionActive, setSessionActive] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(15);
-  const [qrToken, setQrToken] = useState('');
   const [distanceLimit, setDistanceLimit] = useState(5); // Default 5 meters
+
+  // Multi-session management
+  const [activeSessions, setActiveSessions] = useState([]);
+  const [selectedSessionId, setSelectedSessionId] = useState('all'); // 'all' or specific session id
+
   // Professor (doctor) GPS location
   const [profCoords, setProfCoords] = useState(null);
   const [logs, setLogs] = useState([]);
   const [firebaseError, setFirebaseError] = useState(null);
   const channelRef = useRef(null);
 
-  // Initialize and load session/logs
+  // Initialize and load sessions/logs
   useEffect(() => {
     // Fetch professor's actual GPS location on mount
     if (navigator.geolocation) {
@@ -34,14 +36,10 @@ export default function ProfessorPortal() {
       );
     }
 
-    const active = getActiveSession();
-    if (active) {
-      setCourse(active.course);
-      setSessionActive(true);
-      setQrToken(active.qrToken);
-      if (active.lat && active.lng) {
-        setProfCoords({ lat: active.lat, lng: active.lng });
-      }
+    const saved = getActiveSessions();
+    if (saved && saved.length > 0) {
+      setActiveSessions(saved);
+      setSelectedSessionId(saved[0].id);
     }
     setLogs(getAttendanceLogs());
 
@@ -50,7 +48,6 @@ export default function ProfessorPortal() {
       if (message.type === 'STUDENT_SCAN') {
         const newLog = message.payload;
         setLogs((prev) => {
-          // Check if this student already scanned in this session
           if (prev.some(l => l.studentId === newLog.studentId && l.timestamp === newLog.timestamp)) {
             return prev;
           }
@@ -59,18 +56,13 @@ export default function ProfessorPortal() {
           return updated;
         });
       } else if (message.type === 'REQUEST_SESSION_STATE') {
-        // Send state to student portal if requested
-        if (sessionActive) {
-          postChannelMessage(channelRef.current, 'SESSION_UPDATE', {
-            profName,
-            lectureTitle,
-            course,
-            sessionActive: true,
-            qrToken,
-            lat: profCoords?.lat ?? 30.0444,
-            lng: profCoords?.lng ?? 31.2357,
-            distanceLimit: Number(distanceLimit) || 5
-          });
+        // Send all active sessions to student portal
+        const currentSaved = getActiveSessions();
+        postChannelMessage(channelRef.current, 'SESSIONS_UPDATE', currentSaved);
+      } else if (message.type === 'SESSIONS_UPDATE') {
+        if (Array.isArray(message.payload)) {
+          setActiveSessions(message.payload);
+          saveActiveSessions(message.payload);
         }
       } else if (message.type === 'FIREBASE_ERROR') {
         setFirebaseError(message.payload);
@@ -82,19 +74,27 @@ export default function ProfessorPortal() {
         channelRef.current.close();
       }
     };
-  }, [sessionActive, course, qrToken, profName, lectureTitle, distanceLimit]);
+  }, []);
 
-  // Generate dynamic QR token and return it (no side‑effects here)
-  const generateQRToken = () => {
-    const randomSessionId = 'sess_' + Math.random().toString(36).substr(2, 9);
+  // Sync selectedSessionId if current list changes
+  useEffect(() => {
+    if (activeSessions.length > 0 && selectedSessionId !== 'all') {
+      const exists = activeSessions.some(s => s.id === selectedSessionId);
+      if (!exists) {
+        setSelectedSessionId(activeSessions[0].id);
+      }
+    }
+  }, [activeSessions, selectedSessionId]);
+
+  // Generate dynamic QR token for a session
+  const generateQRToken = (lectureData, sessionId) => {
     const header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
     const payloadObj = {
-      profName,
-      lectureTitle,
-      course,
-      sessionId: randomSessionId,
+      profName: lectureData.profName,
+      lectureTitle: lectureData.lectureTitle,
+      course: lectureData.course,
+      sessionId: sessionId,
       timestamp: Date.now(),
-      // Use professor's actual GPS if available, otherwise fallback to a default
       lat: profCoords?.lat ?? 30.0444,
       lng: profCoords?.lng ?? 31.2357,
     };
@@ -102,41 +102,9 @@ export default function ProfessorPortal() {
     const sig = Array.from({ length: 30 }, () =>
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"[Math.floor(Math.random() * 64)]
     ).join("");
-    const token = `${header}.${payload.substring(0, 20)}...${sig.substring(0, 10)}`;
-    return token;
+    return `${header}.${payload.substring(0, 20)}...${sig.substring(0, 10)}`;
   };
 
-// QR token is generated once on lecture start; no automatic rotation
-
-  const startLecture = async () => {
-    try {
-      setFirebaseError(null);
-      // Obtain professor's local IP address
-      const ip = await getLocalIP();
-      setSessionActive(true);
-      setTimeLeft(15);
-      // Clear logs from previous sessions when starting new
-      setLogs([]);
-      saveAttendanceLogs([]);
-      
-      // Generate initial QR token
-      const token = generateQRToken();
-      setQrToken(token);
-
-      // Persist professor location (if known)
-      const lat = profCoords?.lat ?? 30.0444;
-      const lng = profCoords?.lng ?? 31.2357;
-      // Include IP, profName, and lectureTitle in session payload
-      const sessionPayload = { profName, lectureTitle, course, sessionActive: true, qrToken: token, lat, lng, ip, distanceLimit: Number(distanceLimit) || 5 };
-      saveActiveSession(sessionPayload);
-      await postChannelMessage(channelRef.current, 'SESSION_UPDATE', sessionPayload);
-    } catch (err) {
-      console.error(err);
-      setFirebaseError(err.message);
-    }
-  };
-
-  // Helper to get local IP via WebRTC
   const getLocalIP = () => {
     return new Promise((resolve) => {
       try {
@@ -158,7 +126,6 @@ export default function ProfessorPortal() {
             pc.close();
           }
         };
-        // Fallback after short timeout
         setTimeout(() => resolve(null), 2000);
       } catch (err) {
         console.warn('WebRTC IP fetch error:', err);
@@ -167,48 +134,117 @@ export default function ProfessorPortal() {
     });
   };
 
-  const stopLecture = async () => {
+  const startNewLecture = async () => {
     try {
       setFirebaseError(null);
-      setSessionActive(false);
-      clearActiveSession();
-      await postChannelMessage(channelRef.current, 'SESSION_UPDATE', {
+      const ip = await getLocalIP();
+      const newSessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      
+      const newSession = {
+        id: newSessionId,
+        profName,
+        department,
+        lectureTitle,
         course,
-        sessionActive: false,
-        qrToken: '',
-      });
+        distanceLimit: Number(distanceLimit) || 5,
+        lat: profCoords?.lat ?? 30.0444,
+        lng: profCoords?.lng ?? 31.2357,
+        ip,
+        sessionActive: true,
+        createdAt: Date.now(),
+      };
+
+      const token = generateQRToken(newSession, newSessionId);
+      newSession.qrToken = token;
+
+      const updatedSessions = [newSession, ...activeSessions];
+      setActiveSessions(updatedSessions);
+      setSelectedSessionId(newSessionId);
+      saveActiveSessions(updatedSessions);
+
+      await postChannelMessage(channelRef.current, 'SESSIONS_UPDATE', updatedSessions);
     } catch (err) {
       console.error(err);
       setFirebaseError(err.message);
     }
   };
 
+  const stopLecture = async (sessionIdToStop) => {
+    try {
+      setFirebaseError(null);
+      const updated = activeSessions.filter(s => s.id !== sessionIdToStop);
+      setActiveSessions(updated);
+      saveActiveSessions(updated);
+
+      if (selectedSessionId === sessionIdToStop) {
+        setSelectedSessionId(updated.length > 0 ? updated[0].id : 'all');
+      }
+
+      await postChannelMessage(channelRef.current, 'SESSIONS_UPDATE', updated);
+    } catch (err) {
+      console.error(err);
+      setFirebaseError(err.message);
+    }
+  };
+
+  const stopAllLectures = async () => {
+    if (window.confirm('هل أنت متأكد من إنهاء جميع المحاضرات النشطة؟')) {
+      try {
+        setFirebaseError(null);
+        setActiveSessions([]);
+        setSelectedSessionId('all');
+        saveActiveSessions([]);
+        await postChannelMessage(channelRef.current, 'SESSIONS_UPDATE', []);
+      } catch (err) {
+        console.error(err);
+        setFirebaseError(err.message);
+      }
+    }
+  };
+
   const handleClearHistory = async () => {
-    if (window.confirm('هل أنت متأكد من مسح جميع سجلات الحضور للجلسة الحالية من الخادم وقاعدة البيانات؟')) {
+    if (window.confirm('هل أنت متأكد من مسح جميع سجلات الحضور للجلسات الحالية من الخادم وقاعدة البيانات؟')) {
       await clearAllAttendanceLogs();
       setLogs([]);
     }
   };
 
-  const getStats = () => {
-    const totalScans = logs.length;
-    const verified = logs.filter(l => l.status === 'Attended').length;
-    const rejected = logs.filter(l => l.status === 'Rejected').length;
+  // Get active session object if selected
+  const activeSelectedSession = activeSessions.find(s => s.id === selectedSessionId);
+
+  // Filter logs by selected session or all
+  const filteredLogs = logs.filter(log => {
+    if (selectedSessionId === 'all') return true;
+    if (log.sessionId) return log.sessionId === selectedSessionId;
+    // Fallback match by course
+    if (activeSelectedSession) {
+      return log.course === activeSelectedSession.course || log.lectureTitle === activeSelectedSession.lectureTitle;
+    }
+    return true;
+  });
+
+  const getStats = (logList) => {
+    const totalScans = logList.length;
+    const verified = logList.filter(l => l.status === 'Attended').length;
+    const rejected = logList.filter(l => l.status === 'Rejected').length;
     const rate = totalScans > 0 ? ((verified / totalScans) * 100).toFixed(1) : '100';
     return { totalScans, verified, rejected, rate };
   };
 
-  const stats = getStats();
+  const stats = getStats(filteredLogs);
 
   const exportToCSV = (statusFilter, filenamePrefix) => {
-    const filteredLogs = logs.filter(l => statusFilter === 'all' || (statusFilter === 'Attended' ? l.status === 'Attended' : l.status !== 'Attended'));
-    if (filteredLogs.length === 0) {
-      alert('لا توجد بيانات متاحة للتصدير لهذه الفئة');
+    const exportLogs = filteredLogs.filter(l => statusFilter === 'all' || (statusFilter === 'Attended' ? l.status === 'Attended' : l.status !== 'Attended'));
+    if (exportLogs.length === 0) {
+      alert('لا توجد بيانات متاحة للتصدير لهذه المحاضرة / الفئة');
       return;
     }
 
-    const headers = ['معرف الطالب', 'اسم الطالب', 'البريد الجامعي', 'الحالة', 'فحص الجهاز', 'فحص GPS', 'مطابقة الوجه', 'التاريخ والوقت'];
-    const rows = filteredLogs.map(log => [
+    const currentCourse = activeSelectedSession ? activeSelectedSession.course : 'جميع_المحاضرات';
+    const headers = ['معرف المحاضرة', 'المادة / الكورس', 'معرف الطالب', 'اسم الطالب', 'البريد الجامعي', 'الحالة', 'سلامة الجهاز', 'فحص GPS', 'مطابقة الوجه', 'التاريخ والوقت'];
+    const rows = exportLogs.map(log => [
+      `"${log.sessionId || ''}"`,
+      `"${log.course || log.lectureTitle || ''}"`,
       `"${log.studentId || ''}"`,
       `"${log.name || ''}"`,
       `"${log.email || ''}"`,
@@ -224,7 +260,7 @@ export default function ProfessorPortal() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `${filenamePrefix}_${course}_${new Date().toISOString().slice(0,10)}.csv`);
+    link.setAttribute('download', `${filenamePrefix}_${currentCourse}_${new Date().toISOString().slice(0,10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -237,6 +273,96 @@ export default function ProfessorPortal() {
           ⚠️ خطأ في المزامنة مع قاعدة بيانات Firebase: ({firebaseError}). يرجى التأكد من تفعيل Firestore Database وضبط القواعد (Rules) لتكون public.
         </div>
       )}
+
+      {/* Active Lectures Selector Bar */}
+      {activeSessions.length > 0 && (
+        <div className="card" style={{ marginBottom: '1.5rem', background: 'rgba(99, 102, 241, 0.05)', border: '1px solid var(--accent)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <BookOpen style={{ color: 'var(--accent)' }} size={20} />
+              <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800 }}>
+                المحاضرات النشطة حالياً ({activeSessions.length})
+              </h3>
+            </div>
+            <button 
+              className="btn btn-secondary"
+              onClick={stopAllLectures}
+              style={{ background: 'var(--danger)', color: 'white', padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+            >
+              <Square size={13} /> إغلاق جميع المحاضرات النشطة
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <button 
+              onClick={() => setSelectedSessionId('all')}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: '8px',
+                border: '1px solid ' + (selectedSessionId === 'all' ? 'var(--accent)' : 'var(--surface-border)'),
+                background: selectedSessionId === 'all' ? 'var(--accent)' : 'rgba(255,255,255,0.03)',
+                color: 'white',
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: '0.85rem'
+              }}
+            >
+              🌐 عرض جميع المحاضرات ({logs.length} سجل)
+            </button>
+
+            {activeSessions.map((session) => {
+              const sessionLogCount = logs.filter(l => l.sessionId === session.id || l.course === session.course).length;
+              const isSelected = selectedSessionId === session.id;
+              return (
+                <div 
+                  key={session.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '8px',
+                    border: '1px solid ' + (isSelected ? 'var(--accent)' : 'var(--surface-border)'),
+                    background: isSelected ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.02)',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => setSelectedSessionId(session.id)}
+                >
+                  <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)' }}></span>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: isSelected ? 'white' : 'var(--fg)' }}>
+                      {session.course}: {session.lectureTitle}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--muted)' }}>
+                      المعلم: {session.profName} • ({sessionLogCount} حضور)
+                    </div>
+                  </div>
+                  <button 
+                    title="إغلاق هذه المحاضرة"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      stopLecture(session.id);
+                    }}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--danger)',
+                      cursor: 'pointer',
+                      padding: '0.2rem',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Stats Grid */}
       <div className="grid-4">
         <div className="card">
           <div className="card-title">إجمالي عمليات المسح</div>
@@ -261,23 +387,30 @@ export default function ProfessorPortal() {
       </div>
 
       <div className="dashboard-layout">
+        {/* Attendance Logs Table */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <h2 className="section-title" style={{ margin: 0 }}>سجل الحضور الأمني الفوري</h2>
-            <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <div>
+              <h2 className="section-title" style={{ margin: 0 }}>سجل الحضور الأمني الفوري</h2>
+              <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                {selectedSessionId === 'all' ? 'يعرض جميع المحاضرات النشطة والسابقة' : `مفلتر للمحاضرة: ${activeSelectedSession?.lectureTitle || selectedSessionId}`}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <button 
                 className="btn btn-secondary" 
                 onClick={() => exportToCSV('Attended', 'الطلاب_الحاضرون')}
                 style={{ background: 'var(--success)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
               >
-                <Download size={14} /> تصدير الحاضرين (Excel)
+                <Download size={14} /> تصدير الحاضرين ({activeSelectedSession ? activeSelectedSession.course : 'Excel'})
               </button>
               <button 
                 className="btn btn-secondary" 
                 onClick={() => exportToCSV('Rejected', 'الطلاب_المخالفون')}
                 style={{ background: 'var(--warning, #eab308)', color: 'black', padding: '0.4rem 0.8rem', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem', fontWeight: 600 }}
               >
-                <Download size={14} /> تصدير المخالفين (Excel)
+                <Download size={14} /> تصدير المخالفين ({activeSelectedSession ? activeSelectedSession.course : 'Excel'})
               </button>
               {logs.length > 0 && (
                 <button 
@@ -285,45 +418,53 @@ export default function ProfessorPortal() {
                   onClick={handleClearHistory} 
                   style={{ background: 'var(--danger)', color: 'white', padding: '0.4rem 0.8rem', fontSize: '0.8rem' }}
                 >
-                  مسح التاريخ
+                  مسح السجلات
                 </button>
               )}
             </div>
           </div>
+
           <div className="table-container">
             <table>
               <thead>
                 <tr>
+                  <th>المادة / الكورس</th>
                   <th>معرف الطالب</th>
-                <th>الاسم</th>
-                <th>البريد الجامعي</th>
-                <th>الحالة</th>
-                <th>سلامة الجهاز</th>
-                <th>فحص GPS</th>
-                <th>نقاط مطابقة الوجه</th>
+                  <th>الاسم</th>
+                  <th>البريد الجامعي</th>
+                  <th>الحالة</th>
+                  <th>سلامة الجهاز</th>
+                  <th>فحص GPS</th>
+                  <th>مطابقة الوجه</th>
                 </tr>
               </thead>
               <tbody>
-                {logs.length === 0 ? (
+                {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan="7" style={{ textAlign: 'center', color: 'var(--muted)', padding: '2rem' }}>
-                      لا يوجد عمليات مسح مسجلة حالياً. قم ببدء المحاضرة ودع الطلاب يمسحون الكود.
+                    <td colSpan="8" style={{ textAlign: 'center', color: 'var(--muted)', padding: '2rem' }}>
+                      {selectedSessionId === 'all' 
+                        ? 'لا يوجد عمليات مسح مسجلة حالياً. قم ببدء محاضرة ودع الطلاب يمسحون الكود.'
+                        : 'لا توجد عمليات مسح مسجلة لهذه المحاضرة المحددة حتى الآن.'
+                      }
                     </td>
                   </tr>
                 ) : (
-                  logs.map((log, index) => (
+                  filteredLogs.map((log, index) => (
                     <tr key={index}>
-                        <td style={{ fontFamily: 'var(--font-mono)' }}>{log.studentId}</td>
-                        <td>{log.name}</td>
-                        <td>{log.email || ''}</td>
-                        <td>
-                          <span className={`badge ${log.status === 'Attended' ? 'badge-success' : 'badge-danger'}`}>
-                            {log.status === 'Attended' ? 'مقبول' : 'مرفوض'}
-                          </span>
-                        </td>
-                        <td>{log.integrity}</td>
-                        <td>{log.gps}</td>
-                        <td>{log.liveness}</td>
+                      <td style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent)' }}>
+                        {log.course || log.lectureTitle || '-'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-mono)' }}>{log.studentId}</td>
+                      <td>{log.name}</td>
+                      <td>{log.email || ''}</td>
+                      <td>
+                        <span className={`badge ${log.status === 'Attended' ? 'badge-success' : 'badge-danger'}`}>
+                          {log.status === 'Attended' ? 'مقبول' : 'مرفوض'}
+                        </span>
+                      </td>
+                      <td>{log.integrity}</td>
+                      <td>{log.gps}</td>
+                      <td>{log.liveness}</td>
                     </tr>
                   ))
                 )}
@@ -332,105 +473,104 @@ export default function ProfessorPortal() {
           </div>
         </div>
 
+        {/* Right Side: Create New Session & QR Code Display */}
         <div>
+          {/* Lecture Creation Card */}
           <div className="card" style={{ marginBottom: '1.5rem' }}>
-            <h3 className="section-title" style={{ fontSize: '1.1rem', marginBottom: '1rem' }}>التحكم بالمحاضرة</h3>
-            {!sessionActive ? (
-              <>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>اسم المعلم / المحاضر</label>
-                  <input 
-                    type="text" 
-                    value={profName} 
-                    onChange={(e) => setProfName(e.target.value)} 
-                    placeholder="مثال: د. محمود يحيى"
-                  />
-                </div>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>القسم الأكاديمي (كلية الصيدلة)</label>
-                  <select value={department} onChange={(e) => {
-                    const dept = e.target.value;
-                    setDepartment(dept);
-                    if (dept === 'PHARM-MIC') { setCourse('P-MIC-301'); setLectureTitle('الميكروبيولوجي والمناعة (Microbiology & Immunology)'); }
-                    else if (dept === 'PHARM-COL') { setCourse('P-COL-401'); setLectureTitle('الأدوية والسموم (Pharmacology & Toxicology)'); }
-                    else if (dept === 'PHARM-COG') { setCourse('P-COG-201'); setLectureTitle('العقاقير والنباتات الطبية (Pharmacognosy)'); }
-                    else if (dept === 'PHARM-CEU') { setCourse('P-CEU-302'); setLectureTitle('الصيدلانيات والتقنية الصيدلية (Pharmaceutics)'); }
-                    else if (dept === 'PHARM-CHM') { setCourse('P-CHM-102'); setLectureTitle('الكيمياء الصيدلية والعضوية (Pharmaceutical Chemistry)'); }
-                    else if (dept === 'PHARM-CLI') { setCourse('P-CLI-501'); setLectureTitle('الصيدلة الإكلينيكية والممارسة الصيدلية (Clinical Pharmacy)'); }
-                    else if (dept === 'PHARM-BCH') { setCourse('P-BCH-202'); setLectureTitle('الكيمياء الحيوية والبيولوجيا الجزئية (Biochemistry)'); }
-                  }}>
-                    <option value="PHARM-MIC">قسم الميكروبيولوجي والمناعة (Microbiology & Immunology)</option>
-                    <option value="PHARM-COL">قسم الأدوية والسموم (Pharmacology & Toxicology)</option>
-                    <option value="PHARM-COG">قسم العقاقير والنباتات الطبية (Pharmacognosy)</option>
-                    <option value="PHARM-CEU">قسم الصيدلانيات والتكنولوجيا الصيدلية (Pharmaceutics)</option>
-                    <option value="PHARM-CHM">قسم الكيمياء الصيدلية (Pharmaceutical Chemistry)</option>
-                    <option value="PHARM-CLI">قسم الصيدلة الإكلينيكية وممارسة الصيدلة (Clinical Pharmacy)</option>
-                    <option value="PHARM-BCH">قسم الكيمياء الحيوية (Biochemistry)</option>
-                  </select>
-                </div>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>عنوان المحاضرة / المادة</label>
-                  <input 
-                    type="text" 
-                    value={lectureTitle} 
-                    onChange={(e) => setLectureTitle(e.target.value)} 
-                    placeholder="مثال: الميكروبيولوجي / علم الأدوية"
-                  />
-                </div>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>رمز المقرر (Course Code)</label>
-                  <input 
-                    type="text" 
-                    value={course} 
-                    onChange={(e) => setCourse(e.target.value)} 
-                    placeholder="مثال: P-MIC-301"
-                  />
-                </div>
-                <div style={{ marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
-                    المسافة المسموح بها لتسجيل الحضور (بالأمتار)
-                  </label>
-                  <input 
-                    type="number" 
-                    min="1" 
-                    max="100" 
-                    value={distanceLimit} 
-                    onChange={(e) => setDistanceLimit(e.target.value)} 
-                    placeholder="مثال: 3 أو 5 متر"
-                  />
-                </div>
-                <div style={{ marginBottom: '1.5rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>موقع القاعة</label>
-                  <input type="text" value="Classroom 402-A (GPS: 30.0444, 31.2357)" readOnly />
-                </div>
-                <button className="btn" style={{ width: '100%' }} onClick={startLecture}>
-                  <Play size={16} /> إنشاء وتفعيل كود المحاضرة (QR)
-                </button>
-              </>
-            ) : (
-              <>
-                <div style={{ padding: '0.75rem', background: 'rgba(255,255,255,0.02)', borderRadius: '8px', marginBottom: '1rem' }}>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--muted)' }}>المعلم: <strong style={{ color: 'var(--fg)' }}>{profName}</strong></div>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--accent)', marginTop: '0.25rem' }}>
-                    {lectureTitle} ({course})
-                  </div>
-                </div>
-                <button className="btn btn-danger" style={{ width: '100%' }} onClick={stopLecture}>
-                  <Square size={16} /> إنهاء المحاضرة وإغلاق الجلسة
-                </button>
-              </>
-            )}
+            <h3 className="section-title" style={{ fontSize: '1.1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              <Plus size={18} /> تفعيل محاضرة جديدة
+            </h3>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>اسم المعلم / المحاضر</label>
+              <input 
+                type="text" 
+                value={profName} 
+                onChange={(e) => setProfName(e.target.value)} 
+                placeholder="مثال: د. محمود يحيى"
+              />
+            </div>
+            
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>القسم الأكاديمي (كلية الصيدلة)</label>
+              <select value={department} onChange={(e) => {
+                const dept = e.target.value;
+                setDepartment(dept);
+                if (dept === 'PHARM-MIC') { setCourse('P-MIC-301'); setLectureTitle('الميكروبيولوجي والمناعة (Microbiology & Immunology)'); }
+                else if (dept === 'PHARM-COL') { setCourse('P-COL-401'); setLectureTitle('الأدوية والسموم (Pharmacology & Toxicology)'); }
+                else if (dept === 'PHARM-COG') { setCourse('P-COG-201'); setLectureTitle('العقاقير والنباتات الطبية (Pharmacognosy)'); }
+                else if (dept === 'PHARM-CEU') { setCourse('P-CEU-302'); setLectureTitle('الصيدلانيات والتقنية الصيدلية (Pharmaceutics)'); }
+                else if (dept === 'PHARM-CHM') { setCourse('P-CHM-102'); setLectureTitle('الكيمياء الصيدلية والعضوية (Pharmaceutical Chemistry)'); }
+                else if (dept === 'PHARM-CLI') { setCourse('P-CLI-501'); setLectureTitle('الصيدلة الإكلينيكية والممارسة الصيدلية (Clinical Pharmacy)'); }
+                else if (dept === 'PHARM-BCH') { setCourse('P-BCH-202'); setLectureTitle('الكيمياء الحيوية والبيولوجيا الجزئية (Biochemistry)'); }
+              }}>
+                <option value="PHARM-MIC">قسم الميكروبيولوجي والمناعة (Microbiology & Immunology)</option>
+                <option value="PHARM-COL">قسم الأدوية والسموم (Pharmacology & Toxicology)</option>
+                <option value="PHARM-COG">قسم العقاقير والنباتات الطبية (Pharmacognosy)</option>
+                <option value="PHARM-CEU">قسم الصيدلانيات والتكنولوجيا الصيدلية (Pharmaceutics)</option>
+                <option value="PHARM-CHM">قسم الكيمياء الصيدلية (Pharmaceutical Chemistry)</option>
+                <option value="PHARM-CLI">قسم الصيدلة الإكلينيكية وممارسة الصيدلة (Clinical Pharmacy)</option>
+                <option value="PHARM-BCH">قسم الكيمياء الحيوية (Biochemistry)</option>
+              </select>
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>عنوان المحاضرة / المادة</label>
+              <input 
+                type="text" 
+                value={lectureTitle} 
+                onChange={(e) => setLectureTitle(e.target.value)} 
+                placeholder="مثال: الميكروبيولوجي / علم الأدوية"
+              />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>رمز المقرر (Course Code)</label>
+              <input 
+                type="text" 
+                value={course} 
+                onChange={(e) => setCourse(e.target.value)} 
+                placeholder="مثال: P-MIC-301"
+              />
+            </div>
+
+            <div style={{ marginBottom: '1rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 600, display: 'block', marginBottom: '0.5rem' }}>
+                المسافة المسموح بها لتسجيل الحضور (بالأمتار)
+              </label>
+              <input 
+                type="number" 
+                min="1" 
+                max="100" 
+                value={distanceLimit} 
+                onChange={(e) => setDistanceLimit(e.target.value)} 
+                placeholder="مثال: 3 أو 5 متر"
+              />
+            </div>
+
+            <button className="btn" style={{ width: '100%' }} onClick={startNewLecture}>
+              <Play size={16} /> تفعيل وبث هذه المحاضرة الآن (QR جديد)
+            </button>
           </div>
 
-          {sessionActive && (
+          {/* QR Code Display for Selected Active Session */}
+          {activeSelectedSession ? (
             <div className="qr-container">
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.25rem' }}>رمز الـ QR المشفر والديناميكي</h3>
-              <p style={{ fontSize: '0.75rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>مشفر بـ AES-256 وموقع بـ JWT</p>
+              <div style={{ background: 'rgba(99,102,241,0.1)', padding: '0.5rem 0.75rem', borderRadius: '8px', width: '100%', marginBottom: '0.75rem' }}>
+                <span className="badge badge-success" style={{ marginBottom: '0.25rem' }}>محاضرة نشطة</span>
+                <h4 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 800 }}>{activeSelectedSession.lectureTitle}</h4>
+                <div style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>
+                  كود المقرر: <strong>{activeSelectedSession.course}</strong> • المعلم: <strong>{activeSelectedSession.profName}</strong>
+                </div>
+              </div>
+
+              <h3 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '0.25rem' }}>رمز الـ QR الخاص بهذه المحاضرة</h3>
+              <p style={{ fontSize: '0.7rem', color: 'var(--muted)', marginBottom: '0.5rem' }}>مشفر بـ AES-256 وموقع بـ JWT ومستقل عن باقي المحاضرات</p>
               
-              <div className="qr-code-box" style={{ width: '200px', height: '200px' }}>
+              <div className="qr-code-box" style={{ width: '190px', height: '190px' }}>
                 <QRCode
-                  value={qrToken}
-                  size={200}
+                  value={activeSelectedSession.qrToken}
+                  size={190}
                   bgColor="var(--bg)"
                   fgColor="var(--accent)"
                   level="M"
@@ -438,15 +578,9 @@ export default function ProfessorPortal() {
                 />
               </div>
 
-              <div className="timer-ring" style={{ marginBottom: '1rem' }}>
-                <RefreshCw size={14} className="animate-spin" />
-                <span>تحديث الكود خلال:</span>
-                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800 }}>{timeLeft}ث</span>
-              </div>
-
-              <div style={{ width: '100%', maxWidth: '240px' }}>
+              <div style={{ width: '100%', maxWidth: '240px', marginTop: '0.75rem' }}>
                 <div style={{ 
-                  fontSize: '0.65rem', 
+                  fontSize: '0.6rem', 
                   fontFamily: 'var(--font-mono)', 
                   color: 'var(--muted)', 
                   padding: '0.5rem', 
@@ -456,9 +590,24 @@ export default function ProfessorPortal() {
                   wordBreak: 'break-all',
                   textAlign: 'left'
                 }}>
-                  {qrToken}
+                  {activeSelectedSession.qrToken}
                 </div>
               </div>
+
+              <button 
+                className="btn btn-danger" 
+                style={{ width: '100%', marginTop: '1rem', fontSize: '0.8rem' }}
+                onClick={() => stopLecture(activeSelectedSession.id)}
+              >
+                <Square size={14} /> إنهاء وتوقيف كود هذه المحاضرة
+              </button>
+            </div>
+          ) : (
+            <div className="card" style={{ textAlign: 'center', padding: '2rem', color: 'var(--muted)' }}>
+              <BookOpen size={36} style={{ marginBottom: '0.5rem', opacity: 0.5 }} />
+              <p style={{ fontSize: '0.85rem', margin: 0 }}>
+                اختر محاضرة نشطة من الشريط أعلى الصفحة أو قم بتفعيل محاضرة جديدة لعرض الـ QR الخاص بها.
+              </p>
             </div>
           )}
         </div>
@@ -466,3 +615,4 @@ export default function ProfessorPortal() {
     </div>
   );
 }
+

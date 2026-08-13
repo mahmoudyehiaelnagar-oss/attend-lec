@@ -45,23 +45,24 @@ export const createBroadcastChannel = (onMessage) => {
       }
     };
 
-    // Firebase Firestore Realtime Listener for Active Sessions
+    // Firebase Firestore Realtime Listener for Active Sessions (Multi-session support)
     try {
-      onSnapshot(doc(db, 'sessions', 'active_session'), 
+      onSnapshot(doc(db, 'sessions', 'active_sessions'), 
         (docSnap) => {
           if (docSnap.exists()) {
-            const sessionData = docSnap.data();
+            const data = docSnap.data();
+            const sessionsList = data.sessions || [];
             if (onMessage) {
-              onMessage({ type: 'SESSION_UPDATE', payload: sessionData });
+              onMessage({ type: 'SESSIONS_UPDATE', payload: sessionsList });
             }
           } else {
             if (onMessage) {
-              onMessage({ type: 'SESSION_UPDATE', payload: { sessionActive: false } });
+              onMessage({ type: 'SESSIONS_UPDATE', payload: [] });
             }
           }
         },
         (error) => {
-          console.warn('Firebase session listener error:', error);
+          console.warn('Firebase sessions listener error:', error);
           if (onMessage) {
             onMessage({ type: 'FIREBASE_ERROR', payload: error.message });
           }
@@ -107,12 +108,8 @@ export const postChannelMessage = async (channel, type, payload) => {
 
   // Sync to Firebase Cloud Firestore for real devices online
   try {
-    if (type === 'SESSION_UPDATE') {
-      if (payload.sessionActive) {
-        await setDoc(doc(db, 'sessions', 'active_session'), payload);
-      } else {
-        await deleteDoc(doc(db, 'sessions', 'active_session'));
-      }
+    if (type === 'SESSIONS_UPDATE') {
+      await setDoc(doc(db, 'sessions', 'active_sessions'), { sessions: payload });
     } else if (type === 'STUDENT_SCAN') {
       await addDoc(collection(db, 'attendance_logs'), payload);
     }
@@ -125,17 +122,35 @@ export const postChannelMessage = async (channel, type, payload) => {
   }
 };
 
-// LocalStorage helpers for session persistence
-export const saveActiveSession = (session) => {
-  localStorage.setItem('uams_active_session', JSON.stringify(session));
+// LocalStorage helpers for active sessions persistence
+export const saveActiveSessions = (sessions) => {
+  localStorage.setItem('uams_active_sessions', JSON.stringify(sessions));
 };
 
-export const getActiveSession = () => {
-  const session = localStorage.getItem('uams_active_session');
-  return session ? JSON.parse(session) : null;
+export const getActiveSessions = () => {
+  const sessions = localStorage.getItem('uams_active_sessions');
+  if (sessions) {
+    try {
+      return JSON.parse(sessions);
+    } catch (e) {
+      return [];
+    }
+  }
+  // Legacy fallback
+  const oldSession = localStorage.getItem('uams_active_session');
+  if (oldSession) {
+    try {
+      const parsed = JSON.parse(oldSession);
+      if (parsed && parsed.sessionActive) {
+        return [parsed];
+      }
+    } catch (e) {}
+  }
+  return [];
 };
 
-export const clearActiveSession = () => {
+export const clearActiveSessions = () => {
+  localStorage.removeItem('uams_active_sessions');
   localStorage.removeItem('uams_active_session');
 };
 
@@ -147,3 +162,4 @@ export const getAttendanceLogs = () => {
   const logs = localStorage.getItem('uams_attendance_logs');
   return logs ? JSON.parse(logs) : [];
 };
+

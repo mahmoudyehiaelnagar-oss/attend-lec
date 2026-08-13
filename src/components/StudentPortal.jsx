@@ -1,28 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Shield, MapPin, Camera, Smartphone, AlertOctagon, CheckCircle2 } from 'lucide-react';
-import { createBroadcastChannel, postChannelMessage } from '../utils/sharedState';
+import { Camera } from 'lucide-react';
+import { createBroadcastChannel, postChannelMessage, getActiveSessions } from '../utils/sharedState';
 import jsQR from 'jsqr';
-
-const MOCK_STUDENTS = [
-  { id: '2024-PHARM-099', name: 'أحمد الغامدي', profile: 'clean', title: 'سليم (مطابقة 100%)' },
-  { id: '2024-PHARM-088', name: 'خالد منصور', profile: 'rooted', title: 'جهاز مكسور الحماية (Rooted)' },
-  { id: '2024-PHARM-115', name: 'ياسمين ممدوح', profile: 'fake_gps', title: 'موقع وهمي (Fake GPS)' },
-  { id: '2024-PHARM-042', name: 'كريم علي', profile: 'liveness_fail', title: 'فشل الفحص الحيوي (Liveness Fail)' }
-];
 
 export default function StudentPortal() {
   const [studentId, setStudentId] = useState('');
   const [studentName, setStudentName] = useState('');
-  const [studentEmail, setStudentEmail] = useState('');
-  const [selectedStudent, setSelectedStudent] = useState(MOCK_STUDENTS[0]);
+  const [studentEmail] = useState('');
   const [studentIp, setStudentIp] = useState('');
-  const [activeSession, setActiveSession] = useState(null);
+
+  // Multi-session support
+  const [activeSessions, setActiveSessions] = useState([]);
+  const [selectedSessionId, setSelectedSessionId] = useState('');
+
   const [scanStep, setScanStep] = useState('idle'); // idle, scanning, integrity, location, fingerprint, liveness, done
-  const [logDetails, setLogDetails] = useState('الرجاء تعبئة بيانات الطالب والضغط على زر بدء الفحص وتنسيق جهازك الحصري.');
+  const [logDetails, setLogDetails] = useState('الرجاء اختيار المحاضرة وتعبئة بيانات الطالب والضغط على زر بدء الفحص.');
   const [actualCoords, setActualCoords] = useState(null);
   const [profCoords, setProfCoords] = useState(null);
   const [distanceToProf, setDistanceToProf] = useState(null);
-  const [distanceToClass, setDistanceToClass] = useState(null);
   const [firebaseError, setFirebaseError] = useState(null);
   const [registeredOnThisDevice, setRegisteredOnThisDevice] = useState(null);
 
@@ -31,6 +26,9 @@ export default function StudentPortal() {
   const channelRef = useRef(null);
   const canvasRef = useRef(null);
   const scanIntervalRef = useRef(null);
+
+  // Active session computed property
+  const activeSession = activeSessions.find(s => s.id === selectedSessionId) || activeSessions[0] || null;
 
   // Obtain student device IP on mount
   useEffect(() => {
@@ -68,43 +66,54 @@ export default function StudentPortal() {
     });
   };
 
-  // Check if this device has already registered for the current active session
+  // Load bound student identity on mount
   useEffect(() => {
-    if (activeSession) {
-      const lockKey = `device_lock_${activeSession.course}_${activeSession.qrToken?.substring(0, 15) || 'session'}`;
-      const existing = localStorage.getItem(lockKey);
-      if (existing) {
-        try {
-          const parsed = JSON.parse(existing);
-          setRegisteredOnThisDevice(parsed);
-          setStudentId(parsed.studentId || '');
-          setStudentName(parsed.name || '');
-          setScanStep('done');
-          setLogDetails(`✓ تم تسجيل الحضور من هذا الجهاز بنجاح للطالب: (${parsed.name} - ${parsed.studentId}). لا يمكن تسجيل طالب آخر من نفس الجهاز.`);
-        } catch (e) {
-          console.error(e);
-        }
+    const savedBound = localStorage.getItem('uams_device_bound_student');
+    if (savedBound) {
+      try {
+        const parsed = JSON.parse(savedBound);
+        setBoundStudent(parsed);
+        setStudentId(parsed.studentId || '');
+        setStudentName(parsed.name || '');
+      } catch (e) {
+        console.error(e);
       }
     }
-  }, [activeSession]);
+  }, []);
 
-  // Sync session state from Professor
+  // Sync active sessions from Professor / Shared State
   useEffect(() => {
+    const initial = getActiveSessions();
+    if (initial && initial.length > 0) {
+      setActiveSessions(initial);
+      setSelectedSessionId(initial[0].id);
+    }
+
     channelRef.current = createBroadcastChannel((message) => {
-        if (message.type === 'SESSION_UPDATE') {
-          const session = message.payload;
-          if (session.sessionActive) {
-            setActiveSession(session);
-            if (session.lat && session.lng) {
-              setProfCoords({ lat: session.lat, lng: session.lng });
-            }
-          } else {
-            setActiveSession(null);
-          }
-        } else if (message.type === 'FIREBASE_ERROR') {
-          setFirebaseError(message.payload);
+      if (message.type === 'SESSIONS_UPDATE') {
+        const sessions = message.payload || [];
+        setActiveSessions(sessions);
+        if (sessions.length > 0) {
+          setSelectedSessionId((prev) => {
+            const exists = sessions.some(s => s.id === prev);
+            return exists ? prev : sessions[0].id;
+          });
+        } else {
+          setSelectedSessionId('');
         }
-      });
+      } else if (message.type === 'SESSION_UPDATE') { // Legacy support
+        const session = message.payload;
+        if (session && session.sessionActive) {
+          setActiveSessions([session]);
+          setSelectedSessionId(session.id || 'legacy');
+        } else {
+          setActiveSessions([]);
+          setSelectedSessionId('');
+        }
+      } else if (message.type === 'FIREBASE_ERROR') {
+        setFirebaseError(message.payload);
+      }
+    });
 
     // Request active session state on load
     setTimeout(() => {
@@ -117,9 +126,6 @@ export default function StudentPortal() {
         (position) => {
           const { latitude, longitude } = position.coords;
           setActualCoords({ lat: latitude, lng: longitude });
-          // Distance to Classroom (30.0444, 31.2357) in meters
-          const dist = calculateDistance(latitude, longitude, 30.0444, 31.2357);
-          setDistanceToClass(dist);
         },
         (error) => {
           console.warn('Geolocation access denied/failed.');
@@ -135,13 +141,50 @@ export default function StudentPortal() {
     };
   }, []);
 
-// Calculate distance to professor when both coordinates are available
-useEffect(() => {
-  if (actualCoords && profCoords) {
-    const dist = calculateDistance(actualCoords.lat, actualCoords.lng, profCoords.lat, profCoords.lng);
-    setDistanceToProf(dist);
-  }
-}, [actualCoords, profCoords]);
+  // Update professor coordinates based on active session
+  useEffect(() => {
+    if (activeSession) {
+      if (activeSession.lat && activeSession.lng) {
+        setProfCoords({ lat: activeSession.lat, lng: activeSession.lng });
+      }
+    }
+  }, [activeSession]);
+
+  // Check if this device has already registered for the selected active session
+  useEffect(() => {
+    if (activeSession) {
+      const lockKey = `device_lock_${activeSession.id || activeSession.course}_${activeSession.qrToken?.substring(0, 15) || 'session'}`;
+      const existing = localStorage.getItem(lockKey);
+      if (existing) {
+        try {
+          const parsed = JSON.parse(existing);
+          setRegisteredOnThisDevice(parsed);
+          setStudentId(parsed.studentId || '');
+          setStudentName(parsed.name || '');
+          setScanStep('done');
+          setLogDetails(`✓ تم تسجيل الحضور لمادة (${activeSession.course}) من هذا الجهاز بنجاح للطالب: (${parsed.name} - ${parsed.studentId}).`);
+        } catch (e) {
+          console.error(e);
+        }
+      } else {
+        setRegisteredOnThisDevice(null);
+        if (scanStep === 'done') {
+          setScanStep('idle');
+          setLogDetails('جاهز لمسح كود المحاضرة المحددة.');
+        }
+      }
+    } else {
+      setRegisteredOnThisDevice(null);
+    }
+  }, [activeSession, selectedSessionId]);
+
+  // Calculate distance to professor when both coordinates are available
+  useEffect(() => {
+    if (actualCoords && profCoords) {
+      const dist = calculateDistance(actualCoords.lat, actualCoords.lng, profCoords.lat, profCoords.lng);
+      setDistanceToProf(dist);
+    }
+  }, [actualCoords, profCoords]);
 
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3; // Earth radius in meters
@@ -177,16 +220,6 @@ useEffect(() => {
     }
   };
 
-  // Student registration inputs
-  const handleStudentChange = (e) => {
-    const student = MOCK_STUDENTS.find(s => s.id === e.target.value);
-    setSelectedStudent(student);
-    if (student) {
-      setStudentId(student.id);
-      setStudentName(student.name);
-    }
-  };
-
   const scanQRFrame = () => {
     if (videoRef.current && streamRef.current && scanStep === 'scanning') {
       const video = videoRef.current;
@@ -206,7 +239,7 @@ useEffect(() => {
 
         if (code) {
           const scannedToken = code.data;
-          // Validate token
+          // Validate token against selected active session
           if (activeSession && scannedToken === activeSession.qrToken) {
             // QR Matched! Stop scanning loop and go to next step
             if (scanIntervalRef.current) {
@@ -215,12 +248,12 @@ useEffect(() => {
             }
             
             setScanStep('integrity');
-            setLogDetails('✓ تم مسح الـ QR وقراءته بنجاح! جاري فحص سلامة نظام التشغيل (OS Integrity)...');
+            setLogDetails(`✓ تم تجميع وقراءة الـ QR الخاص بمادة (${activeSession.course})! جاري فحص سلامة الجهاز...`);
             
-            // Start the remaining verification steps
+            // Start remaining verification steps
             setTimeout(() => {
               setScanStep('location');
-              setLogDetails('جاري التقاط إحداثيات الـ GPS ومطابقتها مع موقع المعلم بالوقت الفعلي...');
+              setLogDetails('جاري التقاط إحداثيات الـ GPS ومطابقتها مع موقع المحاضرة...');
               
               if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(
@@ -236,7 +269,7 @@ useEffect(() => {
                     dist = calculateDistance(latitude, longitude, targetLat, targetLng);
                     setDistanceToProf(dist);
                     
-                    const gpsDesc = `إحداثياتك الحالية تم التحقق منها وتبعد ${dist.toFixed(1)} متر عن موقع المعلم (المسموح: حتى ${allowedDistance} متر).`;
+                    const gpsDesc = `إحداثياتك الحالية تم التحقق منها وتبعد ${dist.toFixed(1)} متر عن المعلم (المسموح: حتى ${allowedDistance} متر).`;
                     
                     if (dist > allowedDistance) {
                       failScan('تم الرفض (مخالف للشروط - خارج المسافة المسموح بها)', `أنت تبعد ${dist.toFixed(1)} متر عن المعلم (المسافة المسموح بها هي ${allowedDistance} متر فقط).`);
@@ -250,16 +283,19 @@ useEffect(() => {
                       setScanStep('fingerprint');
                       setLogDetails('التحقق من بصمة الجهاز (Hardware Fingerprint Binding): التأكد من الربط الحصري بالـ IP...');
                       
-                      // Step 4: Device Fingerprint check
+                      // Step 4: Biometric Liveness
                       setTimeout(() => {
                         setScanStep('liveness');
                         setLogDetails('فحص الحيوية (Liveness Detection): يرجى النظر للكاميرا والرمش بعينيك...');
                         
-                        // Step 5: Biometric Liveness
                         setTimeout(() => {
                           stopCamera();
                           
                           const scanResult = {
+                            sessionId: activeSession.id || 'sess_' + Date.now(),
+                            course: activeSession.course,
+                            lectureTitle: activeSession.lectureTitle,
+                            profName: activeSession.profName,
                             studentId: studentId.trim(),
                             name: studentName.trim(),
                             email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
@@ -270,13 +306,25 @@ useEffect(() => {
                             timestamp: Date.now()
                           };
 
+                          // Bind device permanently to this student identity to prevent proxy attendance for peers
+                          const boundIdentity = { studentId: studentId.trim(), name: studentName.trim() };
+                          localStorage.setItem('uams_device_bound_student', JSON.stringify(boundIdentity));
+                          setBoundStudent(boundIdentity);
+
                           // Save device lock for this session
-                          const lockKey = `device_lock_${activeSession?.course}_${activeSession?.qrToken?.substring(0, 15) || 'session'}`;
+                          const lockKey = `device_lock_${activeSession.id || activeSession.course}_${activeSession.qrToken?.substring(0, 15) || 'session'}`;
                           localStorage.setItem(lockKey, JSON.stringify(scanResult));
                           setRegisteredOnThisDevice(scanResult);
 
                           setScanStep('done');
-                          setLogDetails(`✓ تم تسجيل حضورك بنجاح (${studentName.trim()}) ومزامنته بالوقت الفعلي! تم قفل هذا الجهاز لمنع تكرار التسجيل.`);
+                          const successMsg = `🎉 تم تسجيل حضورك بنجاح في محاضرة (${activeSession.lectureTitle})!`;
+                          setLogDetails(`✅ ${successMsg}\n🔒 تم قفل هذا الجهاز بحساب الطالب (${studentName.trim()}) لمنع تسجيل أي طالب آخر.`);
+                          
+                          // Display success alert message immediately
+                          setTimeout(() => {
+                            alert(`🎉 تم تسجيل حضورك بنجاح!\n\nالمادة: ${activeSession.lectureTitle} (${activeSession.course})\nالطالب: ${studentName.trim()} (${studentId.trim()})\n\n🔒 الجهاز مقفل ومربوط بحسابك حصرياً ولن يسمح بتسجيل حضور لأي طالب آخر.`);
+                          }, 300);
+
                           postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
                         }, 2500);
                       }, 1500);
@@ -293,7 +341,7 @@ useEffect(() => {
             }, 1500);
             return;
           } else {
-            setLogDetails('جاري مسح الـ QR... الرمز المكتشف غير مطابق للمحاضرة النشطة. يرجى توجيه الكاميرا للكود المعروض حالياً.');
+            setLogDetails(`جاري المسح... الرمز المكتشف لا يطابق كود محاضرة (${activeSession?.lectureTitle || 'المحددة'}). يرجى التأكد من اختيار المحاضرة الصحيحة ومسح الكود الخاص بها.`);
           }
         }
       }
@@ -331,11 +379,6 @@ useEffect(() => {
       return;
     }
 
-    // Check device lock
-    if (registeredOnThisDevice) {
-      alert(`⚠️ تنبيه أمني: تم تسجيل الحضور من هذا الجهاز بالفعل لـ (${registeredOnThisDevice.name} - ${registeredOnThisDevice.studentId}).\n\nلا يسمح بتسجيل أكثر من طالب واحد من نفس الجهاز!`);
-      return;
-    }
 
     const effectiveId = studentId.trim();
     const effectiveName = studentName.trim();
@@ -346,7 +389,7 @@ useEffect(() => {
     }
 
     setScanStep('scanning');
-    setLogDetails('جاري فتح الكاميرا... يرجى توجيه الكاميرا نحو باركود المحاضرة (QR Code) لمسحه...');
+    setLogDetails(`جاري فتح الكاميرا... يرجى توجيه الكاميرا نحو باركود محاضرة (${activeSession.lectureTitle}) لمسحه...`);
     startCamera();
   };
 
@@ -366,6 +409,9 @@ useEffect(() => {
     }
 
     const scanResult = {
+      sessionId: activeSession?.id || 'sess_' + Date.now(),
+      course: activeSession?.course || 'غير محدد',
+      lectureTitle: activeSession?.lectureTitle || 'غير محدد',
       studentId: studentId.trim(),
       name: studentName.trim(),
       email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
@@ -376,17 +422,6 @@ useEffect(() => {
       timestamp: Date.now()
     };
     postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
-  };
-
-  const getStepIndicatorClass = (step) => {
-    const order = ['idle', 'scanning', 'integrity', 'location', 'fingerprint', 'liveness', 'done'];
-    const currentIdx = order.indexOf(scanStep);
-    const stepIdx = order.indexOf(step);
-
-    if (scanStep === 'done' && step !== 'done') return 'badge-success';
-    if (currentIdx === stepIdx) return 'active-step';
-    if (currentIdx > stepIdx) return 'completed-step';
-    return 'pending-step';
   };
 
   return (
@@ -404,26 +439,56 @@ useEffect(() => {
             </div>
           )}
           <h3 style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: '1.2rem', marginBottom: '0.25rem' }}>تسجيل الحضور الذكي</h3>
-          <p style={{ fontSize: '0.8rem', color: 'var(--muted)', marginBottom: '1rem' }}>
-            {activeSession ? (
-              <span>
-                محاضرة نشطة: <strong style={{ color: 'var(--accent)' }}>{activeSession.lectureTitle || activeSession.course}</strong> ({activeSession.profName || 'المعلم'})
-              </span>
+
+          {/* Active Lectures Selector Dropdown */}
+          <div className="card" style={{ padding: '0.75rem', marginBottom: '1rem', background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--surface-border)' }}>
+            <label style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent)', display: 'block', marginBottom: '0.35rem' }}>
+              📚 اختر المحاضرة التي تحضرها الآن:
+            </label>
+            {activeSessions.length === 0 ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--muted)', padding: '0.4rem 0' }}>
+                ⚠️ لا توجد محاضرات نشطة حالياً. انتظر حتى يفعل المحاضر الكود.
+              </div>
             ) : (
-              'لا توجد محاضرة نشطة حالياً'
+              <select 
+                value={selectedSessionId} 
+                onChange={(e) => setSelectedSessionId(e.target.value)}
+                style={{ width: '100%', padding: '0.5rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: 600 }}
+              >
+                {activeSessions.map((sess) => (
+                  <option key={sess.id} value={sess.id}>
+                    {sess.course} - {sess.lectureTitle} ({sess.profName})
+                  </option>
+                ))}
+              </select>
             )}
-          </p>
+            
+            {activeSession && (
+              <div style={{ fontSize: '0.7rem', color: 'var(--muted)', marginTop: '0.4rem', lineHeight: '1.3' }}>
+                المستهدف: <strong>{activeSession.lectureTitle}</strong> • نطاق القاعة المسموح: {activeSession.distanceLimit || 5} أمتار
+              </div>
+            )}
+          </div>
 
           {registeredOnThisDevice && (
             <div style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid var(--success)', color: 'var(--success)', fontSize: '0.8rem', padding: '0.65rem 0.85rem', borderRadius: '8px', marginBottom: '1rem', lineHeight: '1.4' }}>
-              🔒 <strong>الجهاز مقفل ومسجل:</strong> تم تسجيل حضور هذا الجهاز بنجاح باسم <strong>{registeredOnThisDevice.name}</strong> ({registeredOnThisDevice.studentId}). لا يمكن تسجيل أي طالب آخر من هذا الجهاز.
+              🔒 <strong>الجهاز مقفل لهذه المحاضرة:</strong> تم تسجيل حضور هذا الجهاز بنجاح باسم <strong>{registeredOnThisDevice.name}</strong> ({registeredOnThisDevice.studentId}).
             </div>
           )}
 
-          <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', border: '1px solid var(--accent)', background: 'rgba(99, 102, 241, 0.08)' }}>
-            <label style={{ fontSize: '0.8rem', fontWeight: 800, display: 'block', marginBottom: '0.6rem', color: 'var(--accent)' }}>
-              📝 تسجيل بيانات الطالب والجهاز (Device Registration)
-            </label>
+          <div className="card" style={{ padding: '0.85rem', marginBottom: '1rem', border: boundStudent ? '1px solid var(--success)' : '1px solid var(--accent)', background: boundStudent ? 'rgba(34, 197, 94, 0.06)' : 'rgba(99, 102, 241, 0.08)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+              <label style={{ fontSize: '0.8rem', fontWeight: 800, color: boundStudent ? 'var(--success)' : 'var(--accent)', margin: 0 }}>
+                {boundStudent ? '🔒 توثيق الجهاز الحصري (Single-Student Device Lock)' : '📝 تسجيل بيانات الطالب والجهاز (Device Registration)'}
+              </label>
+            </div>
+
+            {boundStudent && (
+              <div style={{ fontSize: '0.72rem', color: 'var(--success)', marginBottom: '0.6rem', padding: '0.4rem 0.6rem', background: 'rgba(34, 197, 94, 0.1)', borderRadius: '6px', lineHeight: '1.3' }}>
+                🛡️ <strong>تم قفل هذا الجهاز حصرياً:</strong> هذا الجهاز مربوط رسمياً بحساب الطالب <strong>{boundStudent.name}</strong> ({boundStudent.studentId}). يُحظر استخدامه لتسجيل أي طالب آخر.
+              </div>
+            )}
+
             <div style={{ marginBottom: '0.5rem' }}>
               <label style={{ fontSize: '0.7rem', color: 'var(--muted)', display: 'block', marginBottom: '0.2rem' }}>الرقم الجامعي (University ID):</label>
               <input 
@@ -431,7 +496,7 @@ useEffect(() => {
                 placeholder="أدخل الرقم الجامعي (مثال: 2024-PHARM-099)" 
                 value={studentId} 
                 onChange={(e) => setStudentId(e.target.value)}
-                disabled={scanStep !== 'idle' && scanStep !== 'done'}
+                disabled={Boolean(boundStudent) || (scanStep !== 'idle' && scanStep !== 'done')}
                 style={{ fontSize: '0.85rem', padding: '0.6rem 0.75rem', marginBottom: '0.6rem' }}
               />
               <label style={{ fontSize: '0.7rem', color: 'var(--muted)', display: 'block', marginBottom: '0.2rem' }}>اسم الطالب الثلاثي (Full Name):</label>
@@ -440,7 +505,7 @@ useEffect(() => {
                 placeholder="أدخل اسم الطالب الثلاثي" 
                 value={studentName} 
                 onChange={(e) => setStudentName(e.target.value)}
-                disabled={scanStep !== 'idle' && scanStep !== 'done'}
+                disabled={Boolean(boundStudent) || (scanStep !== 'idle' && scanStep !== 'done')}
                 style={{ fontSize: '0.85rem', padding: '0.6rem 0.75rem' }}
               />
             </div>
@@ -451,8 +516,6 @@ useEffect(() => {
               </span>
             </div>
           </div>
-
-
 
           {/* Camera Frame View */}
           <div className="phone-camera-simulate">
@@ -512,15 +575,27 @@ useEffect(() => {
           </div>
 
           <button 
-            className="btn" 
-            style={{ width: '100%', marginTop: '1rem' }} 
+            className={`btn ${registeredOnThisDevice ? 'btn-secondary' : ''}`} 
+            style={{ 
+              width: '100%', 
+              marginTop: '1rem',
+              background: registeredOnThisDevice ? 'rgba(34, 197, 94, 0.15)' : undefined,
+              border: registeredOnThisDevice ? '1px solid var(--success)' : undefined,
+              color: registeredOnThisDevice ? 'var(--success)' : undefined,
+              fontWeight: 700
+            }} 
             onClick={runSimulation}
             disabled={!activeSession || (scanStep !== 'idle' && scanStep !== 'done')}
           >
-            {activeSession ? '📱 ابدأ الفحص وتسجيل الحضور' : 'المحاضرة غير مفعلة'}
+            {registeredOnThisDevice 
+              ? `🔒 تم تسجيل حضورك مسبقاً في (${activeSession?.course || ''})` 
+              : activeSession 
+                ? `📱 ابدأ مسح كود (${activeSession.course})` 
+                : 'المحاضرة غير مفعلة'}
           </button>
         </div>
       </div>
     </div>
   );
 }
+
