@@ -8,6 +8,7 @@ export default function StudentPortal() {
   const [studentName, setStudentName] = useState('');
   const [studentEmail] = useState('');
   const [studentIp, setStudentIp] = useState('');
+  const [boundStudent, setBoundStudent] = useState(null);
 
   // Multi-session support
   const [activeSessions, setActiveSessions] = useState([]);
