@@ -248,7 +248,7 @@ export default function StudentPortal() {
             }
             
             setScanStep('integrity');
-            setLogDetails(`✓ تم تجميع وقراءة الـ QR الخاص بمادة (${activeSession.course})! جاري فحص سلامة الجهاز...`);
+            setLogDetails(`✓ تم تجميع وقراءة الـ QR الخاص بمادة (${activeSession?.course || ''})! جاري فحص سلامة الجهاز...`);
             
             // Start remaining verification steps
             setTimeout(() => {
@@ -292,10 +292,10 @@ export default function StudentPortal() {
                           stopCamera();
                           
                           const scanResult = {
-                            sessionId: activeSession.id || 'sess_' + Date.now(),
-                            course: activeSession.course,
-                            lectureTitle: activeSession.lectureTitle,
-                            profName: activeSession.profName,
+                            sessionId: activeSession?.id || 'sess_' + Date.now(),
+                            course: activeSession?.course || 'غير محدد',
+                            lectureTitle: activeSession?.lectureTitle || 'غير محدد',
+                            profName: activeSession?.profName || 'المعلم',
                             studentId: studentId.trim(),
                             name: studentName.trim(),
                             email: studentEmail || `${studentId.trim()}@pharmacy.edu.eg`,
@@ -312,17 +312,17 @@ export default function StudentPortal() {
                           setBoundStudent(boundIdentity);
 
                           // Save device lock for this session
-                          const lockKey = `device_lock_${activeSession.id || activeSession.course}_${activeSession.qrToken?.substring(0, 15) || 'session'}`;
+                          const lockKey = `device_lock_${activeSession?.id || activeSession?.course || 'session'}_${activeSession?.qrToken?.substring(0, 15) || 'session'}`;
                           localStorage.setItem(lockKey, JSON.stringify(scanResult));
                           setRegisteredOnThisDevice(scanResult);
 
                           setScanStep('done');
-                          const successMsg = `🎉 تم تسجيل حضورك بنجاح في محاضرة (${activeSession.lectureTitle})!`;
+                          const successMsg = `🎉 تم تسجيل حضورك بنجاح في محاضرة (${activeSession?.lectureTitle || ''})!`;
                           setLogDetails(`✅ ${successMsg}\n🔒 تم قفل هذا الجهاز بحساب الطالب (${studentName.trim()}) لمنع تسجيل أي طالب آخر.`);
                           
                           // Display success alert message immediately
                           setTimeout(() => {
-                            alert(`🎉 تم تسجيل حضورك بنجاح!\n\nالمادة: ${activeSession.lectureTitle} (${activeSession.course})\nالطالب: ${studentName.trim()} (${studentId.trim()})\n\n🔒 الجهاز مقفل ومربوط بحسابك حصرياً ولن يسمح بتسجيل حضور لأي طالب آخر.`);
+                            alert(`🎉 تم تسجيل حضورك بنجاح!\n\nالمادة: ${activeSession?.lectureTitle || ''} (${activeSession?.course || ''})\nالطالب: ${studentName.trim()} (${studentId.trim()})\n\n🔒 الجهاز مقفل ومربوط بحسابك حصرياً ولن يسمح بتسجيل حضور لأي طالب آخر.`);
                           }, 300);
 
                           postChannelMessage(channelRef.current, 'STUDENT_SCAN', scanResult);
